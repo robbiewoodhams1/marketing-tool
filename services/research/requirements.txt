@@ -1,0 +1,5 @@
+# Runtime dependencies: none yet (standard library only).
+# Development / test dependencies:
+pytest>=8
+# Installs the service itself in editable mode so `research` is importable.
+-e .

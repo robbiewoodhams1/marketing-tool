@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research"
+version = "0.1.0"
+description = "Research service for the marketing tool (foundation only)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+research = "research.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
