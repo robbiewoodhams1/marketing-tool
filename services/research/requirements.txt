@@ -1,4 +1,8 @@
-# Runtime dependencies: none yet (standard library only).
+# Runtime dependencies (the YouTube client itself is standard library only):
+# transcript retrieval; the official YouTube Data API does not expose transcript text.
+youtube-transcript-api>=1.2,<2
+# Supabase database writes (PostgREST client only, not the full supabase package).
+postgrest>=2,<3
 # Development / test dependencies:
 pytest>=8
 # Installs the service itself in editable mode so `research` is importable.

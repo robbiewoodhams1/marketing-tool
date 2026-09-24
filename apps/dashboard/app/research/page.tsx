@@ -1,19 +1,33 @@
 import Link from "next/link";
-import { createClient } from "@/supabase/server";
+import { Suspense } from "react";
+import {
+  RecentResearch,
+  RecentResearchSkeleton,
+} from "./_components/recent-research";
+import { ResearchControl } from "./_components/research-control";
 
-export default async function ResearchPage() {
-  const supabase = await createClient();
-
-  const { data: jobs, error } = await supabase
-    .from("research_jobs")
-    .select("id, query, audience, objective, status, created_at")
-    .order("created_at", { ascending: false });
-
+export default function ResearchPage() {
   return (
     <main className="p-8">
       <h1 className="text-xl font-bold">Research</h1>
 
-      <nav className="mt-2 text-sm flex gap-4">
+      <section className="mt-6">
+        <h2 className="text-lg font-semibold">Research control</h2>
+        <ResearchControl />
+      </section>
+
+      <section className="mt-12 max-w-5xl">
+        <h2 className="text-lg font-semibold">Recent research</h2>
+        <Suspense fallback={<RecentResearchSkeleton />}>
+          <RecentResearch />
+        </Suspense>
+      </section>
+
+      <nav
+        aria-label="Browse all collected data"
+        className="mt-8 flex flex-wrap gap-4 text-sm"
+      >
+        <span className="text-foreground/60">Browse everything:</span>
         <Link href="/research/content" className="underline">
           Content
         </Link>
@@ -27,47 +41,6 @@ export default async function ResearchPage() {
           Opportunities
         </Link>
       </nav>
-
-      {error && (
-        <p className="mt-4 text-red-600">
-          Error loading research jobs: {error.message}
-        </p>
-      )}
-
-      {!error && jobs?.length === 0 && (
-        <p className="mt-4">No research jobs yet.</p>
-      )}
-
-      {!error && jobs && jobs.length > 0 && (
-        <table className="mt-4 border-collapse">
-          <thead>
-            <tr>
-              <th className="border px-2 py-1 text-left">Query</th>
-              <th className="border px-2 py-1 text-left">Audience</th>
-              <th className="border px-2 py-1 text-left">Objective</th>
-              <th className="border px-2 py-1 text-left">Status</th>
-              <th className="border px-2 py-1 text-left">Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((job) => (
-              <tr key={job.id}>
-                <td className="border px-2 py-1">
-                  <Link href={`/research/${job.id}`} className="underline">
-                    {job.query}
-                  </Link>
-                </td>
-                <td className="border px-2 py-1">{job.audience}</td>
-                <td className="border px-2 py-1">{job.objective}</td>
-                <td className="border px-2 py-1">{job.status}</td>
-                <td className="border px-2 py-1">
-                  {new Date(job.created_at).toLocaleString()}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </main>
   );
 }

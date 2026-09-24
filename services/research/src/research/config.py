@@ -17,6 +17,8 @@ class Settings:
     # Optional for now; later stages will validate the ones they need.
     supabase_url: str | None = None
     supabase_key: str | None = None
+    # Secret, server-side only: bypasses RLS. Used by research.persistence.
+    supabase_service_role_key: str | None = None
     youtube_api_key: str | None = None
     llm_api_key: str | None = None
 
@@ -27,6 +29,7 @@ class Settings:
             log_level=env.get("RESEARCH_LOG_LEVEL", "INFO").upper(),
             supabase_url=env.get("SUPABASE_URL") or None,
             supabase_key=env.get("SUPABASE_KEY") or None,
+            supabase_service_role_key=env.get("SUPABASE_SERVICE_ROLE_KEY") or None,
             youtube_api_key=env.get("YOUTUBE_API_KEY") or None,
             llm_api_key=env.get("LLM_API_KEY") or None,
         )

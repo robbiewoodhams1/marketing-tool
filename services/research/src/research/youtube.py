@@ -26,9 +26,12 @@ log = get_logger("research.youtube")
 
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+COMMENT_THREADS_URL = "https://www.googleapis.com/youtube/v3/commentThreads"
 WATCH_URL = "https://www.youtube.com/watch?v="
 MAX_RESULTS_LIMIT = 50  # YouTube's per-page maximum for search.list
 MAX_VIDEO_IDS_PER_REQUEST = 50  # videos.list accepts at most 50 ids per call
+MAX_COMMENTS_PER_PAGE = 100  # commentThreads.list per-page maximum
+COMMENT_ORDERS = ("relevance", "time")
 
 # A transport takes a full URL and returns (http_status, response_body).
 # It must raise YouTubeNetworkError if the request could not be completed.
@@ -67,6 +70,13 @@ class YouTubeResponseError(YouTubeError):
     """The API responded successfully but with an unexpected shape."""
 
 
+class YouTubeCommentsUnavailableError(YouTubeError):
+    """Comments cannot be read for a video: disabled, or the video is not found.
+
+    An expected research condition rather than a failure of the API itself.
+    """
+
+
 @dataclass(frozen=True)
 class YouTubeSearchResult:
     video_id: str
@@ -95,6 +105,29 @@ class YouTubeVideoMetadata:
     view_count: int | None = None
     like_count: int | None = None
     comment_count: int | None = None
+
+
+@dataclass(frozen=True)
+class YouTubeComment:
+    """A public comment. `type` is "top_level"; replies are not retrieved yet.
+
+    `text` is the comment as plain text. Author details are deliberately not
+    kept. `like_count` / `updated_at` are None if YouTube omits them.
+    """
+
+    video_id: str
+    comment_id: str
+    text: str
+    published_at: datetime
+    like_count: int | None = None
+    updated_at: datetime | None = None
+    type: str = "top_level"
+
+
+@dataclass(frozen=True)
+class YouTubeCommentPage:
+    comments: list[YouTubeComment]
+    next_page_token: str | None
 
 
 def _urllib_transport(timeout: float) -> Transport:
@@ -198,6 +231,54 @@ class YouTubeClient:
         log.info("YouTube metadata request returned %d videos", len(videos))
         return videos
 
+    def get_comment_threads(
+        self,
+        video_id: str,
+        *,
+        max_results: int = MAX_COMMENTS_PER_PAGE,
+        page_token: str | None = None,
+        order: str = "relevance",
+    ) -> YouTubeCommentPage:
+        """Fetch one page of top-level comments (commentThreads.list, 1 quota unit).
+
+        Replies are not requested. Raises YouTubeCommentsUnavailableError if
+        comments are disabled or the video is not found.
+        """
+        self._require_key()
+        if not video_id.strip():
+            raise ValueError("video_id must not be empty")
+        if not 1 <= max_results <= MAX_COMMENTS_PER_PAGE:
+            raise ValueError(f"max_results must be between 1 and {MAX_COMMENTS_PER_PAGE}")
+        if order not in COMMENT_ORDERS:
+            raise ValueError(f"order must be one of {COMMENT_ORDERS}")
+
+        params = {
+            "part": "snippet",
+            "videoId": video_id,
+            "maxResults": str(max_results),
+            "order": order,
+            "textFormat": "plainText",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        log.info(
+            "YouTube comments request started: video=%s max_results=%d page_token=%s",
+            video_id,
+            max_results,
+            "yes" if page_token else "no",
+        )
+        try:
+            body = self._request(COMMENT_THREADS_URL, params)
+            page = self._parse_comment_threads(body, video_id)
+        except YouTubeCommentsUnavailableError as exc:
+            log.warning("YouTube comments unavailable for %s: %s", video_id, exc)
+            raise
+        except YouTubeError as exc:
+            log.error("YouTube comments request failed: %s: %s", type(exc).__name__, exc)
+            raise
+        log.info("YouTube comments request returned %d comments", len(page.comments))
+        return page
+
     def _require_key(self) -> None:
         if not self._api_key:
             raise YouTubeConfigError(
@@ -230,6 +311,8 @@ class YouTubeClient:
         except (ValueError, KeyError, TypeError, AttributeError):
             pass
 
+        if {"commentsDisabled", "videoNotFound"}.intersection(reasons):
+            return YouTubeCommentsUnavailableError(message)
         quota_reasons = {"quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded",
                          "userRateLimitExceeded"}
         auth_reasons = {"keyInvalid", "keyExpired", "forbidden", "accessNotConfigured",
@@ -303,6 +386,40 @@ class YouTubeClient:
                     "Video item had an unexpected shape"
                 ) from None
         return videos
+
+    @staticmethod
+    def _parse_comment_threads(body: dict[str, Any], video_id: str) -> YouTubeCommentPage:
+        items = body.get("items")
+        if not isinstance(items, list):
+            raise YouTubeResponseError("Response is missing an 'items' list")
+        token = body.get("nextPageToken")
+        if token is not None and not isinstance(token, str):
+            raise YouTubeResponseError("nextPageToken was not a string")
+        comments = []
+        for item in items:
+            try:
+                # Only the thread's top-level comment; item["replies"] is ignored.
+                top = item["snippet"]["topLevelComment"]
+                snippet = top["snippet"]
+                comment_id, text = top["id"], snippet["textDisplay"]
+                if not isinstance(comment_id, str) or not isinstance(text, str):
+                    raise TypeError("id/text is not a string")
+                updated = snippet.get("updatedAt")
+                comments.append(
+                    YouTubeComment(
+                        video_id=snippet.get("videoId") or video_id,
+                        comment_id=comment_id,
+                        text=html.unescape(text),
+                        published_at=_parse_published(snippet["publishedAt"]),
+                        like_count=_parse_count(snippet.get("likeCount")),
+                        updated_at=_parse_published(updated) if updated else None,
+                    )
+                )
+            except (KeyError, TypeError, ValueError, AttributeError):
+                raise YouTubeResponseError(
+                    "Comment thread item had an unexpected shape"
+                ) from None
+        return YouTubeCommentPage(comments, token or None)
 
 
 _DURATION_RE = re.compile(

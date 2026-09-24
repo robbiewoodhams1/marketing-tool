@@ -7,7 +7,10 @@ name = "research"
 version = "0.1.0"
 description = "Research service for the marketing tool (foundation only)"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "youtube-transcript-api>=1.2,<2",
+  "postgrest>=2,<3",
+]
 
 [project.scripts]
 research = "research.main:main"
