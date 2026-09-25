@@ -51,7 +51,8 @@ real values.
 | `SUPABASE_KEY` | Supabase key (unused) | No |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-side service-role secret | Only when saving to Supabase |
 | `YOUTUBE_API_KEY` | YouTube Data API v3 key | Only when calling YouTube |
-| `LLM_API_KEY` | LLM provider credentials | Not yet |
+| `LLM_API_KEY` | Anthropic API key (classification provider) | Only when classifying |
+| `LLM_MODEL` | Model override (default `claude-haiku-4-5-20251001`) | No |
 
 ## YouTube API
 
@@ -394,3 +395,35 @@ the `research.*` namespace.
 ## Planned later
 
 Relevance filtering, retries, scheduling/polling, and LLM analysis.
+
+## Classification foundation (Chapter 1.4.1)
+
+**Not connected yet.** Classification is not called by the research runner and
+nothing is persisted: `content.topic`, `hook`, etc. are untouched. This is a
+tested foundation only; it has not been run against real data.
+
+- `research.classification` — `ClassificationInput` (`video_id`, `title`,
+  optional `description`, `transcript`, `views`, `likes`, `comments_count`;
+  blank text is treated as missing) and `ClassificationResult`.
+- Result: for each of `topic`, `audience`, `pain_point`, `hook`, `hook_type`,
+  `format`, `emotion`, `cta` a `FieldResult(value, confidence, evidence)`.
+  `value` is `null` when evidence is insufficient; any non-null value requires a
+  confidence in 0–1 and a concise evidence excerpt. Parsing is strict (unknown or
+  missing fields are rejected).
+- Controlled vocabularies (enums, easy to extend): `HookType`, `ContentFormat`,
+  `Emotion`. `topic`, `audience`, `pain_point`, `hook`, `cta` are free text.
+- `research.classification_prompt` — versioned prompt (`PROMPT_VERSION`) and the
+  JSON schema of the output.
+- `research.llm` — `LLMProvider` protocol (`classify_content(item)`) and one
+  implementation, `AnthropicProvider` (Messages API over the standard library
+  with forced tool use for structured output; no new dependency, no retries).
+  Errors: `LLMConfigError` (no key), `LLMNetworkError`, `LLMAPIError`,
+  `LLMResponseError` (model output invalid). The API key is never logged.
+
+```python
+provider = AnthropicProvider.from_settings(Settings.from_env())
+result = provider.classify_content(ClassificationInput(video_id, title, description, transcript))
+```
+
+Tests (`tests/test_classification.py`, `tests/test_llm.py`) inject a fake
+transport; no real LLM calls are made.

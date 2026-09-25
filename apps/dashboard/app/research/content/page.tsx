@@ -1,4 +1,9 @@
 import { createClient } from "@/supabase/server";
+import {
+  JobScopeBanner,
+  JobScopeProblem,
+  resolveJobScope,
+} from "../_lib/job-scope";
 
 function formatNumber(value: number | null) {
   return value === null ? "—" : value.toLocaleString();
@@ -8,19 +13,36 @@ function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
-export default async function ContentPage() {
+export default async function ContentPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ job?: string | string[] }>;
+}) {
   const supabase = await createClient();
+  const scope = await resolveJobScope(supabase, (await searchParams).job);
 
-  const { data: content, error } = await supabase
+  if (scope.state === "not-found" || scope.state === "error") {
+    return (
+      <main className="p-8">
+        <h1 className="text-xl font-bold">Content</h1>
+        <JobScopeProblem scope={scope} />
+      </main>
+    );
+  }
+
+  let query = supabase
     .from("content")
     .select(
       "id, research_job_id, platform, url, title, creator, published_at, views, likes, comments_count, topic, pain_point, hook, hook_type, format, created_at",
     )
     .order("created_at", { ascending: false });
+  if (scope.state === "ok") query = query.eq("research_job_id", scope.id);
+  const { data: content, error } = await query;
 
   return (
     <main className="p-8">
       <h1 className="text-xl font-bold">Content</h1>
+      {scope.state === "ok" && <JobScopeBanner scope={scope} noun="Content" />}
 
       {error && (
         <p className="mt-4 text-red-600">
@@ -29,7 +51,11 @@ export default async function ContentPage() {
       )}
 
       {!error && content?.length === 0 && (
-        <p className="mt-4">No content yet.</p>
+        <p className="mt-4">
+          {scope.state === "ok"
+            ? "No content has been collected for this research job yet."
+            : "No content yet."}
+        </p>
       )}
 
       {!error && content && content.length > 0 && (

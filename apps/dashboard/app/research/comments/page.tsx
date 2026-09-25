@@ -1,22 +1,53 @@
 import { createClient } from "@/supabase/server";
+import {
+  JobScopeBanner,
+  JobScopeProblem,
+  resolveJobScope,
+} from "../_lib/job-scope";
 
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
-export default async function CommentsPage() {
+export default async function CommentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ job?: string | string[] }>;
+}) {
   const supabase = await createClient();
+  const scope = await resolveJobScope(supabase, (await searchParams).job);
 
-  const { data: comments, error } = await supabase
-    .from("comments")
-    .select(
-      "id, text, likes, type, topic, pain_point, desire, objection, created_at",
-    )
-    .order("created_at", { ascending: false });
+  if (scope.state === "not-found" || scope.state === "error") {
+    return (
+      <main className="p-8">
+        <h1 className="text-xl font-bold">Comments</h1>
+        <JobScopeProblem scope={scope} />
+      </main>
+    );
+  }
+
+  const columns =
+    "id, text, likes, type, topic, pain_point, desire, objection, created_at";
+  // Comments have no research_job_id: they belong to a job through their
+  // content row (research_jobs -> content -> comments), so join on content.
+  const { data: comments, error } =
+    scope.state === "ok"
+      ? await supabase
+          .from("comments")
+          .select(`${columns}, content!inner(research_job_id)`)
+          .eq("content.research_job_id", scope.id)
+          .order("created_at", { ascending: false })
+      : await supabase
+          .from("comments")
+          .select(columns)
+          .order("created_at", { ascending: false });
 
   return (
     <main className="p-8">
       <h1 className="text-xl font-bold">Comments</h1>
+      {scope.state === "ok" && (
+        <JobScopeBanner scope={scope} noun="Comments" />
+      )}
 
       {error && (
         <p className="mt-4 text-red-600">
@@ -25,7 +56,11 @@ export default async function CommentsPage() {
       )}
 
       {!error && comments?.length === 0 && (
-        <p className="mt-4">No comments yet.</p>
+        <p className="mt-4">
+          {scope.state === "ok"
+            ? "No comments have been collected for this research job yet."
+            : "No comments yet."}
+        </p>
       )}
 
       {!error && comments && comments.length > 0 && (

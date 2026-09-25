@@ -21,6 +21,8 @@ class Settings:
     supabase_service_role_key: str | None = None
     youtube_api_key: str | None = None
     llm_api_key: str | None = None
+    # Optional model override for the LLM provider (default set in research.llm).
+    llm_model: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -32,4 +34,5 @@ class Settings:
             supabase_service_role_key=env.get("SUPABASE_SERVICE_ROLE_KEY") or None,
             youtube_api_key=env.get("YOUTUBE_API_KEY") or None,
             llm_api_key=env.get("LLM_API_KEY") or None,
+            llm_model=env.get("LLM_MODEL") or None,
         )

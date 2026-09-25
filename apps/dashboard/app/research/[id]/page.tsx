@@ -58,9 +58,21 @@ function loadCounts(supabase: Supabase, jobId: string) {
   ]);
 }
 
-function Stat({ label, count }: { label: string; count: Count }) {
-  return (
-    <div className="rounded border border-foreground/15 p-4">
+function Stat({
+  label,
+  count,
+  href,
+}: {
+  label: string;
+  count: Count;
+  href?: string;
+}) {
+  const card = (
+    <div
+      className={`rounded border border-foreground/15 p-4${
+        href ? " hover:bg-foreground/5" : ""
+      }`}
+    >
       <p className="text-2xl font-semibold">
         {count.error ? "—" : formatNumber(count.value)}
       </p>
@@ -71,6 +83,13 @@ function Stat({ label, count }: { label: string; count: Count }) {
         </p>
       )}
     </div>
+  );
+  return href ? (
+    <Link href={href} className="block">
+      {card}
+    </Link>
+  ) : (
+    card
   );
 }
 
@@ -187,8 +206,16 @@ export default async function ResearchJobPage({
 
       <Section title="Collection" description="What has been gathered.">
         <div className="grid gap-4 sm:grid-cols-3">
-          <Stat label="Videos" count={videos} />
-          <Stat label="Comments" count={comments} />
+          <Stat
+            label="Videos"
+            count={videos}
+            href={`/research/content?job=${job.id}`}
+          />
+          <Stat
+            label="Comments"
+            count={comments}
+            href={`/research/comments?job=${job.id}`}
+          />
           <Stat label="Transcripts" count={transcripts} />
         </div>
       </Section>
