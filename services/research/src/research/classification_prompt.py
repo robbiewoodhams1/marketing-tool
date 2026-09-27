@@ -10,7 +10,7 @@ from typing import Any
 
 from research.classification import FIELD_VOCABULARY, ClassificationInput
 
-PROMPT_VERSION = "classification-v1"
+PROMPT_VERSION = "classification-v2"
 
 # Transcripts are truncated for the prompt only; the input model is unchanged.
 MAX_TRANSCRIPT_CHARS = 12_000
@@ -36,18 +36,24 @@ FIELD_DEFINITIONS = {
 SYSTEM_PROMPT = """\
 You classify short-form and long-form video content for marketing research.
 
+Output structure (applies to EVERY field, including the controlled ones):
+- Each field is an object with exactly the keys "value", "confidence" and "evidence". A field is never a bare string.
+- For controlled fields (hook_type, format, emotion) the allowed value goes in that object's "value" key.
+  VALID:   "hook_type": {"value": "pain", "confidence": 0.9, "evidence": "..."}
+  INVALID: "hook_type": "pain"
+
 Rules:
 - Classify ONLY from the evidence supplied. Do not invent facts or use outside knowledge of the video.
-- Infer cautiously. When the evidence is insufficient for a field, set its value to null (with null confidence and evidence). Never guess to fill a field.
+- Infer cautiously. When the evidence is insufficient for a field, set the whole field to null (not an object with null parts). Never guess to fill a field.
 - Identify the hook from the actual opening of the transcript, the title, or the description.
 - Distinguish audience from topic, pain point from general subject, and format from topic.
-- Identify a CTA only if one is explicitly present; otherwise use null.
+- Identify a CTA only if one is explicitly present; otherwise the cta field is null.
 - For every non-null value give a confidence between 0 and 1 and a concise evidence string: a short excerpt or factual reference from the supplied content. Do not explain your reasoning.
-- Controlled fields must use exactly one of the listed values.
+- For controlled fields, "value" must be exactly one of the listed values (if none fits, use "other"; if the evidence is insufficient, the whole field is null).
 - Return only the structured classification, nothing else.
 
 Fields:
-""" + "\n".join(f"- {name}: {text}" for name, text in FIELD_DEFINITIONS.items()) + "\n\nControlled vocabularies:\n" + "\n".join(
+""" + "\n".join(f"- {name}: {text}" for name, text in FIELD_DEFINITIONS.items()) + "\n\nAllowed \"value\"s for the controlled fields:\n" + "\n".join(
     f"- {name}: {', '.join(m.value for m in vocab)}"
     for name, vocab in FIELD_VOCABULARY.items()
     if vocab is not None
@@ -81,6 +87,44 @@ def build_user_prompt(item: ClassificationInput) -> str:
     if stats:
         parts.append("Performance: " + ", ".join(stats))
     return "\n\n".join(parts)
+
+
+def strict_output_json_schema() -> dict[str, Any]:
+    """The same schema in the subset Anthropic's strict tool use accepts.
+
+    Strict mode rejects numeric bounds, and limits how many parameters may be
+    unions (16). So each of the 8 fields is ONE nullable construct: either
+    null (insufficient evidence) or an object whose `value`, `confidence` and
+    `evidence` are all required and non-null. That is 8 unions, not 24.
+    Nothing is loosened: the enums are kept, and the 0-1 confidence range and
+    the exact object shape are still enforced locally by `ClassificationResult`.
+    """
+    props: dict[str, Any] = {}
+    for name, vocab in FIELD_VOCABULARY.items():
+        text: dict[str, Any] = {"type": "string"}
+        if vocab is not None:
+            text["enum"] = [m.value for m in vocab]
+        props[name] = {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "value": text,
+                        "confidence": {"type": "number"},
+                        "evidence": {"type": "string"},
+                    },
+                    "required": ["value", "confidence", "evidence"],
+                    "additionalProperties": False,
+                },
+                {"type": "null"},
+            ]
+        }
+    return {
+        "type": "object",
+        "properties": props,
+        "required": list(props),
+        "additionalProperties": False,
+    }
 
 
 def output_json_schema() -> dict[str, Any]:

@@ -27,6 +27,11 @@ class ClassificationSchemaError(ClassificationError, ValueError):
     """A classification result does not match the schema."""
 
 
+# Version of the ClassificationResult shape (fields + taxonomies), stored with
+# every persisted interpretation. Bump when either changes incompatibly.
+CLASSIFICATION_SCHEMA_VERSION = "classification-v1"
+
+
 # --- Taxonomies -------------------------------------------------------------
 # Small, initial controlled vocabularies. To extend, add a member: validation,
 # the prompt and the tool schema all derive from these enums.
@@ -211,10 +216,12 @@ class ClassificationResult:
         if missing := expected - set(data):
             raise ClassificationSchemaError(f"missing fields: {sorted(missing)}")
         parsed: dict[str, FieldResult] = {}
-        for name in expected:
+        for name in FIELD_VOCABULARY:  # declaration order, so errors are deterministic
             raw = data[name]
             if not isinstance(raw, Mapping):
-                raise ClassificationSchemaError(f"{name} must be an object")
+                raise ClassificationSchemaError(
+                    f"{name} must be an object (got {type(raw).__name__})"
+                )
             if extra := set(raw) - {"value", "confidence", "evidence"}:
                 raise ClassificationSchemaError(f"{name}: unexpected keys {sorted(extra)}")
             parsed[name] = FieldResult(

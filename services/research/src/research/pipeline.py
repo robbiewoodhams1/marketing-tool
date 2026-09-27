@@ -1,7 +1,12 @@
 """Run one existing, queued research job through the acquisition pipeline.
 
     queued -> running -> search -> metadata -> transcripts -> comments
-           -> save -> completed          (any fatal error: -> failed)
+           -> save raw -> classify -> save interpretations -> completed
+                                         (any fatal error: -> failed)
+
+Raw content is saved before classification, so an LLM failure fails the job
+but keeps the acquired data. Videos are classified one at a time; any single
+failure fails the job (no partial-success handling yet).
 
 This is orchestration only: every step is an existing service, injected so the
 flow can be tested without YouTube or Supabase.
@@ -18,7 +23,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from research.classification import ClassificationInput, ClassificationResult
+from research.classification_prompt import PROMPT_VERSION
 from research.comments import YouTubeComments
+from research.llm import LLMProvider
 from research.logging import get_logger
 from research.metadata import YouTubeMetadata
 from research.persistence import (
@@ -56,6 +64,7 @@ class RunSummary:
     transcripts_unavailable: int
     comments_retrieved: int
     saved: SaveSummary
+    classified: int = 0
 
 
 def _ignore(_: str) -> None:
@@ -70,6 +79,7 @@ def run_research_job(
     metadata: YouTubeMetadata,
     transcripts: YouTubeTranscripts,
     comments: YouTubeComments,
+    llm: LLMProvider,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     progress: Progress = _ignore,
 ) -> RunSummary:
@@ -142,6 +152,34 @@ def run_research_job(
         progress(f"✓ Saved {saved.content_inserted} videos")
         progress(f"✓ Saved {saved.comments_inserted} comments")
 
+        # Raw data is already saved: a classification failure below fails the job
+        # but keeps everything acquired.
+        progress("Classifying videos...")
+        results: dict[str, ClassificationResult] = {}
+        for i, video in enumerate(videos, start=1):
+            transcript = found_transcripts.get(video.video_id)
+            results[video.video_id] = llm.classify_content(
+                ClassificationInput(
+                    video_id=video.video_id,
+                    title=video.title,
+                    description=video.description,
+                    transcript=transcript.text if transcript else None,
+                    views=video.view_count,
+                    likes=video.like_count,
+                    comments_count=video.comment_count,
+                )
+            )
+            progress(f"✓ Classified {i}/{len(videos)}")
+
+        progress("Saving interpretations...")
+        saved_interpretations = repository.save_classifications(
+            job_id, results, model=llm.model, prompt_version=PROMPT_VERSION
+        )
+        classified = len(results)
+        progress(f"✓ Saved {saved_interpretations.inserted} interpretations")
+        if saved_interpretations.skipped:
+            progress(f"⚠ {saved_interpretations.skipped} already existed")
+
         progress("Completing job...")
         repository.complete_job(job_id)
         progress("✓ Job completed")
@@ -162,4 +200,5 @@ def run_research_job(
         transcripts_unavailable=missing,
         comments_retrieved=len(all_comments),
         saved=saved,
+        classified=classified,
     )

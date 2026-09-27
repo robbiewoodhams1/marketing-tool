@@ -2,7 +2,7 @@
 
     python -m research.runner --job-id JOB_ID
 
-Needs YOUTUBE_API_KEY, SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the
+Needs YOUTUBE_API_KEY, LLM_API_KEY, SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the
 environment. Exit codes: 0 completed, 1 job could not run / not runnable,
 2 bad arguments or missing configuration, 3 the run failed (job marked failed).
 """
@@ -16,6 +16,7 @@ from collections.abc import Sequence
 
 from research.comments import YouTubeComments
 from research.config import Settings
+from research.llm import AnthropicProvider, LLMConfigError
 from research.logging import configure_logging, get_logger
 from research.metadata import YouTubeMetadata
 from research.persistence import PersistenceConfigError, PersistenceError, ResearchRepository
@@ -57,6 +58,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
 
+    try:
+        llm = AnthropicProvider.from_settings(settings)
+    except LLMConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+
     client = YouTubeClient.from_settings(settings)
     _say("Research Runner")
     _say("────────────────────────────────")
@@ -68,6 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             metadata=YouTubeMetadata(client),
             transcripts=YouTubeTranscripts(),
             comments=YouTubeComments(client),
+            llm=llm,
             progress=lambda line: _say(f"\n{line}" if line.endswith("...") else line),
         )
     except JobError as exc:

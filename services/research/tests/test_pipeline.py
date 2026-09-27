@@ -7,7 +7,15 @@ from test_comments import error_body, threads
 from test_persistence import FakeDatabase, comment, meta
 
 from research import runner
+from research.classification import (
+    CLASSIFICATION_SCHEMA_VERSION,
+    ClassificationInput,
+    ClassificationResult,
+    FieldResult,
+)
+from research.classification_prompt import PROMPT_VERSION
 from research.comments import YouTubeComments
+from research.llm import LLMAPIError, LLMConfigError, LLMNetworkError, LLMResponseError
 from research.metadata import YouTubeMetadata
 from research.persistence import PersistenceError, ResearchRepository
 from research.pipeline import (
@@ -77,6 +85,37 @@ class StubComments:
                 for n in range(1, self.per_video + 1)]
 
 
+def make_result(**overrides):
+    def field(name):
+        return FieldResult(f"{name} value", 0.8, f"{name} evidence")
+
+    fields = {
+        "topic": field("topic"), "audience": field("audience"),
+        "pain_point": field("pain_point"), "hook": field("hook"),
+        "hook_type": FieldResult("pain", 0.7, "hook_type evidence"),
+        "format": FieldResult("tutorial", 0.6, "format evidence"),
+        "emotion": FieldResult("frustration", 0.5, "emotion evidence"),
+        "cta": field("cta"),
+    }
+    fields.update(overrides)
+    return ClassificationResult(**fields)
+
+
+class FakeLLM:
+    """An LLMProvider that never touches the network."""
+
+    def __init__(self, result=None, error=None, fail_on=None, model="fake-model-1"):
+        self.model = model
+        self.result, self.error, self.fail_on = result or make_result(), error, fail_on
+        self.items = []
+
+    def classify_content(self, item):
+        self.items.append(item)
+        if self.error and (self.fail_on is None or item.video_id == self.fail_on):
+            raise self.error
+        return self.result
+
+
 def setup(status="queued", **row):
     db = FakeDatabase()
     db.tables["research_jobs"].append(
@@ -86,15 +125,16 @@ def setup(status="queued", **row):
     return ResearchRepository(db), db
 
 
-def run(repo, *, search=None, metadata=None, transcripts=None, comments=None, **kw):
+def run(repo, *, search=None, metadata=None, transcripts=None, comments=None, llm=None, **kw):
     lines = []
     summary = run_research_job(
         JOB,
         repository=repo,
-        search=search or StubSearch(["a", "b", "c"]),
+        search=search or StubSearch(["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]),
         metadata=metadata or StubMetadata(),
-        transcripts=transcripts or StubTranscripts(["a", "b"]),
+        transcripts=transcripts or StubTranscripts(["aaaaaaaaaaa", "bbbbbbbbbbb"]),
         comments=comments or StubComments(),
+        llm=llm or FakeLLM(),
         progress=lines.append,
         **kw,
     )
@@ -112,17 +152,17 @@ def job_row(db):
 def test_missing_job_fails_clearly_and_creates_nothing():
     repo, db = setup()
     db.tables["research_jobs"].clear()
-    search = StubSearch(["a"])
+    search = StubSearch(["aaaaaaaaaaa"])
     with pytest.raises(JobNotFoundError, match="does not exist"):
         run(repo, search=search)
-    assert db.tables == {"research_jobs": [], "content": [], "comments": []}
+    assert db.tables == {"research_jobs": [], "content": [], "comments": [], "interpretations": []}
     assert search.calls == []
 
 
 @pytest.mark.parametrize("status", ["running", "completed", "failed", None, "weird"])
 def test_non_queued_job_is_refused_untouched(status):
     repo, db = setup(status=status)
-    search = StubSearch(["a"])
+    search = StubSearch(["aaaaaaaaaaa"])
     before = dict(job_row(db))
     with pytest.raises(JobNotRunnableError, match="only queued jobs"):
         run(repo, search=search)
@@ -144,7 +184,7 @@ def test_losing_the_claim_race_runs_nothing():
 
     repo, db = setup()
     racy = Racy(repo._db)
-    search = StubSearch(["a"])
+    search = StubSearch(["aaaaaaaaaaa"])
     with pytest.raises(JobNotRunnableError, match="no longer queued"):
         run(racy, search=search)
     assert search.calls == []
@@ -166,7 +206,7 @@ def test_successful_run_lifecycle_and_relationships():
         "UK sole trader accounting", "UK sole traders", "obj", "2026-01-01T00:00:00+00:00")
 
     assert [c["research_job_id"] for c in db.tables["content"]] == [JOB] * 3
-    assert [c["external_id"] for c in db.tables["content"]] == ["a", "b", "c"]
+    assert [c["external_id"] for c in db.tables["content"]] == ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]
     content_id = {c["external_id"]: c["id"] for c in db.tables["content"]}
     assert len(db.tables["comments"]) == 6
     for c in db.tables["comments"]:
@@ -194,10 +234,10 @@ def test_status_goes_queued_running_completed_in_order():
 
 def test_search_uses_job_query_and_candidate_limit():
     repo, _ = setup()
-    search = StubSearch(["a"])
+    search = StubSearch(["aaaaaaaaaaa"])
     run(repo, search=search)
     assert search.calls == [("UK sole trader accounting", 10)]
-    search = StubSearch(["a"])
+    search = StubSearch(["aaaaaaaaaaa"])
     run(setup()[0], search=search, max_candidates=5)
     assert search.calls == [("UK sole trader accounting", 5)]
 
@@ -205,8 +245,8 @@ def test_search_uses_job_query_and_candidate_limit():
 def test_services_receive_ids_in_search_order():
     repo, _ = setup()
     md, tr, cm = StubMetadata(), StubTranscripts(), StubComments()
-    run(repo, search=StubSearch(["c", "a", "b"]), metadata=md, transcripts=tr, comments=cm)
-    assert md.calls == tr.calls == cm.calls == [["c", "a", "b"]]
+    run(repo, search=StubSearch(["ccccccccccc", "aaaaaaaaaaa", "bbbbbbbbbbb"]), metadata=md, transcripts=tr, comments=cm)
+    assert md.calls == tr.calls == cm.calls == [["ccccccccccc", "aaaaaaaaaaa", "bbbbbbbbbbb"]]
 
 
 def test_progress_reports_each_stage_in_order():
@@ -225,10 +265,10 @@ def test_progress_reports_each_stage_in_order():
 
 def test_missing_transcript_does_not_fail_job_and_stores_null():
     repo, db = setup()
-    run(repo, transcripts=StubTranscripts(["a"]))
+    run(repo, transcripts=StubTranscripts(["aaaaaaaaaaa"]))
     assert job_row(db)["status"] == "completed"
     transcripts = {c["external_id"]: c["transcript"] for c in db.tables["content"]}
-    assert transcripts == {"a": "transcript a", "b": None, "c": None}
+    assert transcripts == {"aaaaaaaaaaa": "transcript aaaaaaaaaaa", "bbbbbbbbbbb": None, "ccccccccccc": None}
 
 
 def test_no_transcripts_at_all_still_completes():
@@ -240,19 +280,19 @@ def test_no_transcripts_at_all_still_completes():
 
 def test_unavailable_metadata_video_is_skipped_everywhere():
     repo, db = setup()
-    md = StubMetadata(unavailable=["b"])
+    md = StubMetadata(unavailable=["bbbbbbbbbbb"])
     tr, cm = StubTranscripts(), StubComments()
     run(repo, metadata=md, transcripts=tr, comments=cm)
-    assert [c["external_id"] for c in db.tables["content"]] == ["a", "c"]
-    assert tr.calls == cm.calls == [["a", "c"]]
+    assert [c["external_id"] for c in db.tables["content"]] == ["aaaaaaaaaaa", "ccccccccccc"]
+    assert tr.calls == cm.calls == [["aaaaaaaaaaa", "ccccccccccc"]]
 
 
 def test_video_with_disabled_comments_is_saved_without_comments():
     repo, db = setup()
     transport = CommentTransport({
-        "a": threads("a", 2),
-        "b": error_body(403, "commentsDisabled", "disabled"),
-        "c": threads("c", 1),
+        "aaaaaaaaaaa": threads("aaaaaaaaaaa", 2),
+        "bbbbbbbbbbb": error_body(403, "commentsDisabled", "disabled"),
+        "ccccccccccc": threads("ccccccccccc", 1),
     })
     real_comments = YouTubeComments(YouTubeClient("k", transport=transport))
     summary, _ = run(repo, comments=real_comments)
@@ -262,7 +302,7 @@ def test_video_with_disabled_comments_is_saved_without_comments():
     content_id = {c["external_id"]: c["id"] for c in db.tables["content"]}
     for c in db.tables["comments"]:
         by_content.setdefault(c["content_id"], []).append(c["external_id"])
-    assert by_content == {content_id["a"]: ["a-c1", "a-c2"], content_id["c"]: ["c-c1"]}
+    assert by_content == {content_id["aaaaaaaaaaa"]: ["aaaaaaaaaaa-c1", "aaaaaaaaaaa-c2"], content_id["ccccccccccc"]: ["ccccccccccc-c1"]}
     assert summary.comments_retrieved == 3
 
 
@@ -290,11 +330,11 @@ def test_transcript_disabled_error_semantics_come_from_the_real_service():
 @pytest.mark.parametrize(
     "kwargs, error",
     [
-        ({"search": StubSearch(["a"], error=YouTubeQuotaError("quota"))}, YouTubeQuotaError),
+        ({"search": StubSearch(["aaaaaaaaaaa"], error=YouTubeQuotaError("quota"))}, YouTubeQuotaError),
         ({"transcripts": StubTranscripts(error=TranscriptNetworkError("down"))},
          TranscriptNetworkError),
         ({"comments": StubComments(error=YouTubeQuotaError("quota"))}, YouTubeQuotaError),
-        ({"search": StubSearch(["a"], error=RuntimeError("boom"))}, RuntimeError),
+        ({"search": StubSearch(["aaaaaaaaaaa"], error=RuntimeError("boom"))}, RuntimeError),
     ],
 )
 def test_fatal_error_marks_failed_and_reraises(kwargs, error):
@@ -320,7 +360,7 @@ def test_persistence_failure_marks_failed_keeps_partial_rows():
 def test_keyboard_interrupt_does_not_leave_job_running():
     repo, db = setup()
     with pytest.raises(KeyboardInterrupt):
-        run(repo, search=StubSearch(["a"], error=KeyboardInterrupt()))
+        run(repo, search=StubSearch(["aaaaaaaaaaa"], error=KeyboardInterrupt()))
     assert job_row(db)["status"] == "failed"
 
 
@@ -335,13 +375,13 @@ def test_failure_to_mark_failed_still_raises_original_error():
     db = Db()
     db.tables = base.tables
     with pytest.raises(YouTubeQuotaError):
-        run(ResearchRepository(db), search=StubSearch(["a"], error=YouTubeQuotaError("q")))
+        run(ResearchRepository(db), search=StubSearch(["aaaaaaaaaaa"], error=YouTubeQuotaError("q")))
 
 
 def test_failed_job_cannot_be_rerun():
     repo, db = setup()
     with pytest.raises(RuntimeError):
-        run(repo, search=StubSearch(["a"], error=RuntimeError("boom")))
+        run(repo, search=StubSearch(["aaaaaaaaaaa"], error=RuntimeError("boom")))
     with pytest.raises(JobNotRunnableError, match="'failed'"):
         run(repo)
 
@@ -355,6 +395,131 @@ def test_completed_job_cannot_be_rerun_and_adds_no_rows():
     assert len(db.tables["content"]) == count
 
 
+# --- classification ------------------------------------------------------------------------
+
+A, B, C = "aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"
+FIELDS = ["topic", "audience", "pain_point", "hook", "hook_type", "format", "emotion", "cta"]
+
+
+def test_successful_run_classifies_and_saves_every_video():
+    repo, db = setup()
+    llm = FakeLLM()
+    summary, lines = run(repo, llm=llm)
+    assert job_row(db)["status"] == "completed" and job_row(db)["completed_at"]
+    assert summary.classified == 3
+    assert [i.video_id for i in llm.items] == [A, B, C]
+    interpretations = db.tables["interpretations"]
+    content_id = {c["external_id"]: c["id"] for c in db.tables["content"]}
+    assert sorted(i["content_id"] for i in interpretations) == sorted(content_id.values())
+    for i in interpretations:
+        assert (i["analysis_type"], i["model"], i["prompt_version"], i["schema_version"]) == (
+            "classification", "fake-model-1", PROMPT_VERSION, CLASSIFICATION_SCHEMA_VERSION)
+        assert i["result"] == make_result().to_dict()  # all 8 fields, value+confidence+evidence
+        assert set(i["result"]) == set(FIELDS)
+    text = "\n".join(lines)
+    assert text.index("Saving results") < text.index("Classifying") < text.index(
+        "Saving interpretations") < text.index("Completing job")
+
+
+def test_classification_input_is_built_from_acquired_data():
+    repo, _ = setup()
+    llm = FakeLLM()
+    run(repo, llm=llm)
+    by_id = {i.video_id: i for i in llm.items}
+    assert by_id[A] == ClassificationInput(
+        A, "A title", "A description", f"transcript {A}", 1500, 40, 7)
+    assert by_id[C].transcript is None  # no transcript: still classified
+
+
+def test_unavailable_metadata_video_is_not_classified():
+    repo, db = setup()
+    llm = FakeLLM()
+    run(repo, metadata=StubMetadata(unavailable=[B]), llm=llm)
+    assert [i.video_id for i in llm.items] == [A, C]
+
+
+def test_null_fields_stay_null_with_evidence_of_others_kept():
+    result = make_result(pain_point=FieldResult(None), cta=FieldResult(None))
+    repo, db = setup()
+    run(repo, llm=FakeLLM(result))
+    stored = db.tables["interpretations"][0]["result"]
+    assert stored["pain_point"] == {"value": None, "confidence": None, "evidence": None}
+    assert stored["cta"] == {"value": None, "confidence": None, "evidence": None}
+    assert stored["hook"] == {"value": "hook value", "confidence": 0.8, "evidence": "hook evidence"}
+
+
+def test_classification_never_writes_to_content():
+    repo, db = setup()
+    run(repo, llm=FakeLLM())
+    for row in db.tables["content"]:
+        assert "classification" not in row
+        assert not set(FIELDS) & set(row)  # topic, hook_type, ... are not written either
+    assert not any(c[0] == "update" and c[1] == "content" for c in db.calls)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        LLMConfigError("no key"),
+        LLMNetworkError("down"),
+        LLMAPIError("HTTP 529", 529),
+        LLMResponseError("invalid classification: bad"),
+    ],
+)
+def test_llm_failure_fails_job_keeps_raw_content_and_reraises(error):
+    repo, db = setup()
+    with pytest.raises(type(error)):
+        run(repo, llm=FakeLLM(error=error))
+    row = job_row(db)
+    assert row["status"] == "failed" and row["completed_at"] is None
+    assert len(db.tables["content"]) == 3 and len(db.tables["comments"]) == 6
+    assert db.tables["interpretations"] == []
+
+
+def test_single_video_failure_fails_the_whole_job_and_saves_no_classification():
+    repo, db = setup()
+    llm = FakeLLM(error=LLMResponseError("bad"), fail_on=B)
+    with pytest.raises(LLMResponseError):
+        run(repo, llm=llm)
+    assert job_row(db)["status"] == "failed"
+    assert [i.video_id for i in llm.items] == [A, B]  # stopped at the failure
+    assert db.tables["interpretations"] == []
+
+
+def test_invalid_classifier_output_fails_job(monkeypatch):
+    # The real provider raises LLMResponseError for a schema-invalid answer
+    # (covered in test_llm); the pipeline must treat it as fatal, not as nulls.
+    repo, db = setup()
+    with pytest.raises(LLMResponseError, match="invalid classification"):
+        run(repo, llm=FakeLLM(error=LLMResponseError("invalid classification: x")))
+    assert job_row(db)["status"] == "failed"
+
+
+def test_classification_save_failure_fails_job():
+    repo, db = setup()
+
+    class Db(FakeDatabase):
+        def insert(self, table, rows):
+            if table == "interpretations":
+                raise PersistenceError("boom")
+            return super().insert(table, rows)
+
+    broken = Db()
+    broken.tables = db.tables
+    with pytest.raises(PersistenceError):
+        run(ResearchRepository(broken))
+    assert job_row(db)["status"] == "failed" and job_row(db)["completed_at"] is None
+    assert len(db.tables["content"]) == 3  # raw content kept
+
+
+def test_acquisition_failure_never_reaches_the_llm():
+    repo, _ = setup()
+    llm = FakeLLM()
+    with pytest.raises(YouTubeQuotaError):
+        run(repo, comments=StubComments(error=YouTubeQuotaError("q")), llm=llm)
+    assert llm.items == []
+
+
 # --- CLI ------------------------------------------------------------------------------------
 
 GOOD_ID = "d8aee101-d48c-4be5-9247-57b33b56fe65"
@@ -363,6 +528,7 @@ GOOD_ID = "d8aee101-d48c-4be5-9247-57b33b56fe65"
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("YOUTUBE_API_KEY", "yt-secret-not-real")
+    monkeypatch.setenv("LLM_API_KEY", "llm-secret-not-real")
     monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sr-secret-not-real")
 
@@ -378,7 +544,7 @@ def test_cli_requires_job_id():
     assert info.value.code == 2
 
 
-@pytest.mark.parametrize("missing", ["YOUTUBE_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"])
+@pytest.mark.parametrize("missing", ["YOUTUBE_API_KEY", "LLM_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"])
 def test_cli_missing_config_exits_2_without_touching_anything(env, monkeypatch, capsys, missing):
     monkeypatch.delenv(missing)
     called = []
@@ -392,10 +558,11 @@ def test_cli_missing_config_exits_2_without_touching_anything(env, monkeypatch, 
 def test_cli_success_exit_0_and_prints_progress_without_secrets(env, monkeypatch, capsys):
     repo, db = setup(id=GOOD_ID)
     monkeypatch.setattr(runner.ResearchRepository, "from_settings", lambda s: repo)
-    monkeypatch.setattr(runner, "YouTubeSearch", lambda c: StubSearch(["a"]))
+    monkeypatch.setattr(runner, "YouTubeSearch", lambda c: StubSearch(["aaaaaaaaaaa"]))
     monkeypatch.setattr(runner, "YouTubeMetadata", lambda c: StubMetadata())
-    monkeypatch.setattr(runner, "YouTubeTranscripts", lambda: StubTranscripts(["a"]))
+    monkeypatch.setattr(runner, "YouTubeTranscripts", lambda: StubTranscripts(["aaaaaaaaaaa"]))
     monkeypatch.setattr(runner, "YouTubeComments", lambda c: StubComments())
+    monkeypatch.setattr(runner.AnthropicProvider, "from_settings", lambda s: FakeLLM())
     code = runner.main(["--job-id", GOOD_ID])
     out = capsys.readouterr()
     assert code == 0, out

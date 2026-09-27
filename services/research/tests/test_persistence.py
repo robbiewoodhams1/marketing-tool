@@ -27,7 +27,7 @@ class FakeDatabase:
     """In-memory tables with generated ids, call log and failure injection."""
 
     def __init__(self, fail_on=None):
-        self.tables = {"research_jobs": [], "content": [], "comments": []}
+        self.tables = {"research_jobs": [], "content": [], "comments": [], "interpretations": []}
         self.calls = []
         self.fail_on = fail_on  # (operation, table)
         self._n = 0

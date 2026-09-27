@@ -23,6 +23,11 @@ class Settings:
     llm_api_key: str | None = None
     # Optional model override for the LLM provider (default set in research.llm).
     llm_model: str | None = None
+    # Optional model for synthesis (falls back to llm_model, then the default).
+    synthesis_model: str | None = None
+    # Optional thinking effort for synthesis (`output_config.effort`). Unset means
+    # "send nothing": the model's own default applies. Validated in research.llm.
+    synthesis_effort: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -35,4 +40,6 @@ class Settings:
             youtube_api_key=env.get("YOUTUBE_API_KEY") or None,
             llm_api_key=env.get("LLM_API_KEY") or None,
             llm_model=env.get("LLM_MODEL") or None,
+            synthesis_model=env.get("SYNTHESIS_MODEL") or None,
+            synthesis_effort=env.get("SYNTHESIS_EFFORT") or None,
         )

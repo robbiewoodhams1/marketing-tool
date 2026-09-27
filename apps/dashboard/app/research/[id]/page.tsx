@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { StatusBadge } from "../_components/status-badge";
 import { formatDate, formatNumber } from "../_lib/format";
+import {
+  insightsHref,
+  parseSynthesisRuns,
+  selectRun,
+  type SynthesisRun,
+} from "../_lib/synthesis";
 import { createClient } from "@/supabase/server";
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
@@ -41,13 +47,15 @@ function loadCounts(supabase: Supabase, jobId: string) {
         .eq("content.research_job_id", jobId),
     ),
     count(content().not("transcript", "is", null)),
-    // "Analysed" = the content row carries an analysis result.
-    count(content().not("analysis_json", "is", null)),
+    // "Analysed" = the content has at least one classification interpretation
+    // (derived analysis lives in `interpretations`, not on `content`). The
+    // inner join keeps only such content rows, each counted once.
     count(
       supabase
-        .from("insights")
-        .select("id", head)
-        .eq("research_job_id", jobId),
+        .from("content")
+        .select("id, interpretations!inner(id)", head)
+        .eq("research_job_id", jobId)
+        .eq("interpretations.analysis_type", "classification"),
     ),
     count(
       supabase
@@ -56,6 +64,41 @@ function loadCounts(supabase: Supabase, jobId: string) {
         .eq("research_job_id", jobId),
     ),
   ]);
+}
+
+type SynthesisSummary = {
+  latest: SynthesisRun | null; // null: no synthesis has been run for this job
+  runs: number;
+  insights: Count; // insights of the latest run
+  error: string | null;
+};
+
+// Insights belong to a synthesis run, and a job can have several runs (a new
+// model or prompt version adds a run; it never replaces one). So the count is
+// of the LATEST run's insights, not a sum across runs. Whether a synthesis
+// exists comes from the syntheses table, not from an empty insights count.
+async function loadSynthesisSummary(
+  supabase: Supabase,
+  jobId: string,
+): Promise<SynthesisSummary> {
+  const { data, error } = await supabase
+    .from("syntheses")
+    .select("id, research_job_id, model, prompt_version, schema_version, created_at")
+    .eq("research_job_id", jobId);
+  if (error) {
+    return { latest: null, runs: 0, insights: { value: null, error: error.message }, error: error.message };
+  }
+  const selection = selectRun(parseSynthesisRuns(data));
+  if (selection.kind !== "selected") {
+    return { latest: null, runs: 0, insights: { value: 0, error: null }, error: null };
+  }
+  const insights = await count(
+    supabase
+      .from("insights")
+      .select("id", { count: "exact", head: true })
+      .eq("synthesis_id", selection.run.id),
+  );
+  return { latest: selection.run, runs: selection.runs.length, insights, error: null };
 }
 
 function Stat({
@@ -157,8 +200,11 @@ export default async function ResearchJobPage({
     );
   }
 
-  const [videos, comments, transcripts, analysed, insights, opportunities] =
-    await loadCounts(supabase, job.id);
+  const [[videos, comments, transcripts, analysed, opportunities], synthesis] =
+    await Promise.all([
+      loadCounts(supabase, job.id),
+      loadSynthesisSummary(supabase, job.id),
+    ]);
 
   return (
     <main className="max-w-5xl p-8">
@@ -220,7 +266,10 @@ export default async function ResearchJobPage({
         </div>
       </Section>
 
-      <Section title="Analysis" description="What has been analysed.">
+      <Section
+        title="Analysis"
+        description="Content in this job with at least one classification interpretation."
+      >
         <div className="grid gap-4 sm:grid-cols-3">
           <Stat label="Analysed content" count={analysed} />
         </div>
@@ -231,10 +280,32 @@ export default async function ResearchJobPage({
         )}
       </Section>
 
-      <Section title="Insights" description="What the system has discovered.">
+      <Section
+        title="Insights"
+        description="What the synthesis found across this job's evidence."
+      >
         <div className="grid gap-4 sm:grid-cols-3">
-          <Stat label="Insights" count={insights} />
+          <Stat
+            label="Insights (latest synthesis)"
+            count={synthesis.insights}
+            href={insightsHref(job.id)}
+          />
         </div>
+        {synthesis.error ? null : synthesis.latest ? (
+          <p className="mt-2 text-sm text-foreground/70">
+            Latest synthesis: {synthesis.latest.model} · {synthesis.latest.promptVersion} ·{" "}
+            {formatDate(synthesis.latest.createdAt)}
+            {synthesis.runs > 1 ? ` (${synthesis.runs} runs)` : ""}.{" "}
+            {synthesis.insights.value === 0 ? "It completed and found no insights. " : ""}
+            <Link href={insightsHref(job.id)} className="underline">
+              View insights and their evidence
+            </Link>
+          </p>
+        ) : (
+          <p className="mt-2 text-sm text-foreground/60">
+            No synthesis has been run for this job yet.
+          </p>
+        )}
       </Section>
 
       <Section

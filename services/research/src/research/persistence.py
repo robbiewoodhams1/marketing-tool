@@ -2,8 +2,10 @@
 
 Takes the objects the acquisition layer already produces (video metadata,
 transcripts, comments) and stores them in the existing `research_jobs`,
-`content` and `comments` tables. Nothing here calls YouTube, and no analysis
-columns are ever written: they stay NULL for chapter 1.4.
+`content` and `comments` tables. Nothing here calls YouTube. Saving raw videos
+never writes analysis columns. AI interpretations are stored separately and
+append-only in `interpretations` (`save_classifications`); `content` stays raw
+evidence and no longer has classification columns.
 
 Writes go through the small `Database` protocol so tests never need Supabase;
 `SupabaseDatabase` implements it with the official `postgrest` client using the
@@ -16,11 +18,12 @@ and marks the job "failed"; see `ResearchRepository.save_result`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from research.classification import CLASSIFICATION_SCHEMA_VERSION, ClassificationResult
 from research.config import Settings
 from research.logging import get_logger
 from research.transcripts import YouTubeTranscript
@@ -29,6 +32,7 @@ from research.youtube import YouTubeComment, YouTubeVideoMetadata
 log = get_logger("research.persistence")
 
 PLATFORM_YOUTUBE = "youtube"
+ANALYSIS_CLASSIFICATION = "classification"
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
@@ -49,7 +53,7 @@ class PersistenceConfigError(PersistenceError):
 
 
 class Database(Protocol):
-    """The three operations the repository needs; rows are plain dicts."""
+    """The operations the repositories need; rows are plain dicts."""
 
     def insert(self, table: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Insert rows in one request and return them as stored (with ids)."""
@@ -70,6 +74,10 @@ class Database(Protocol):
         self, table: str, values: dict[str, Any], *, eq: dict[str, Any]
     ) -> list[dict[str, Any]]:
         """Update rows matching ALL `eq` filters; return the rows changed."""
+        ...
+
+    def rpc(self, function: str, params: dict[str, Any]) -> Any:
+        """Call a Postgres function (one transaction) and return its JSON result."""
         ...
 
 
@@ -151,6 +159,12 @@ class SupabaseDatabase:
         except Exception as exc:
             raise self._fail("update", table, exc) from None
 
+    def rpc(self, function: str, params: dict[str, Any]) -> Any:
+        try:
+            return self._client.rpc(function, params).execute().data
+        except Exception as exc:
+            raise self._fail("rpc", function, exc) from None
+
 
 @dataclass(frozen=True)
 class ResearchJob:
@@ -178,6 +192,12 @@ class SaveSummary:
     content_skipped: int = 0  # already stored for this job
     comments_inserted: int = 0
     comments_skipped: int = 0  # already stored, or repeated in the input
+
+
+@dataclass(frozen=True)
+class SaveInterpretationsSummary:
+    inserted: int = 0
+    skipped: int = 0  # an identical interpretation already existed
 
 
 @dataclass(frozen=True)
@@ -232,7 +252,8 @@ def _content_row(job_id: str, video: ResearchVideo) -> dict[str, Any]:
         "comments_count": meta.comment_count,
         "transcript": transcript if transcript and transcript.strip() else None,
         "updated_at": _now(),
-        # shares, saves and every analysis column are deliberately omitted (NULL).
+        # shares and saves are deliberately omitted (NULL). content is raw evidence:
+        # derived analysis lives in `interpretations`, never on this row.
     }
 
 
@@ -414,6 +435,85 @@ class ResearchRepository:
             comments_skipped=skipped,
         )
         log.info("Saved research data for job %s: %s", job_id, summary)
+        return summary
+
+    def save_classifications(
+        self,
+        job_id: str,
+        results: Mapping[str, ClassificationResult],
+        *,
+        model: str,
+        prompt_version: str,
+        schema_version: str = CLASSIFICATION_SCHEMA_VERSION,
+    ) -> SaveInterpretationsSummary:
+        """Append one `interpretations` row per video. Never updates anything.
+
+        `results` maps YouTube video id -> result for this job's content rows.
+        Each row stores analysis_type "classification", the model, prompt
+        version, schema version and the complete result (every field with its
+        value, confidence and evidence; nulls preserved). `content` is not
+        modified: raw evidence and interpretations stay separate, and the old
+        content has no classification columns any more.
+
+        Idempotency: the identity of an operation is (content, analysis_type,
+        model, prompt_version, schema_version). If an interpretation with that
+        exact identity already exists it is skipped (first wins, never
+        overwritten), so retrying the same job with the same model and versions
+        adds nothing. A different model, prompt version or schema version is a
+        different operation and appends a new row alongside the old ones. The
+        check is not atomic (no unique constraint, by design), so two writers
+        racing on the same identity could still both insert.
+
+        Raises PersistenceError, before writing anything, if a video has no
+        content row for this job.
+        """
+        if not results:
+            return SaveInterpretationsSummary()
+        content_ids: dict[str, str] = {}
+        for chunk in _chunks(list(results), LOOKUP_BATCH_SIZE):
+            rows = self._db.select(
+                "content",
+                "id,external_id",
+                eq={"research_job_id": job_id, "platform": PLATFORM_YOUTUBE},
+                in_=("external_id", list(chunk)),
+            )
+            content_ids.update({r["external_id"]: r["id"] for r in rows})
+        if missing := [v for v in results if v not in content_ids]:
+            raise PersistenceError(f"No content rows for job {job_id} and videos {missing}")
+
+        already: set[str] = set()
+        for chunk in _chunks(list(content_ids.values()), LOOKUP_BATCH_SIZE):
+            rows = self._db.select(
+                "interpretations",
+                "id,content_id",
+                eq={
+                    "analysis_type": ANALYSIS_CLASSIFICATION,
+                    "model": model,
+                    "prompt_version": prompt_version,
+                    "schema_version": schema_version,
+                },
+                in_=("content_id", list(chunk)),
+            )
+            already.update(r["content_id"] for r in rows)
+
+        new_rows = [
+            {
+                "content_id": content_ids[video_id],
+                "analysis_type": ANALYSIS_CLASSIFICATION,
+                "model": model,
+                "prompt_version": prompt_version,
+                "schema_version": schema_version,
+                "result": result.to_dict(),
+            }
+            for video_id, result in results.items()
+            if content_ids[video_id] not in already
+        ]
+        for chunk in _chunks(new_rows, INSERT_BATCH_SIZE):
+            self._db.insert("interpretations", list(chunk))
+        summary = SaveInterpretationsSummary(
+            inserted=len(new_rows), skipped=len(results) - len(new_rows)
+        )
+        log.info("Saved interpretations for job %s: %s", job_id, summary)
         return summary
 
     def save_result(
