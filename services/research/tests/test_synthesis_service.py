@@ -680,4 +680,7 @@ def test_migration_writes_through_one_atomic_function_only_the_service_role_can_
 
 def test_earlier_migrations_are_not_rewritten_by_this_chapter():
     names = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
-    assert names.index(next(n for n in names if "create_syntheses" in n)) == len(names) - 1
+    # Exactly five migrations predate this chapter's; it lands immediately
+    # after them. A later chapter (e.g. opportunity creation) may add further
+    # migrations after this one without this assertion becoming false.
+    assert names.index(next(n for n in names if "create_syntheses" in n)) == 5

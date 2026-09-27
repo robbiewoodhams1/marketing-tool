@@ -33,6 +33,17 @@ from research.classification_prompt import (
 from research.config import Settings
 from research.evidence_pack import EvidencePack
 from research.logging import get_logger
+from research.opportunity import OpportunityCreationOutput, OpportunitySchemaError
+from research.opportunity_pack import OpportunityInputPack
+from research.opportunity_prompt import (
+    SYSTEM_PROMPT as OPPORTUNITY_SYSTEM_PROMPT,
+)
+from research.opportunity_prompt import (
+    build_user_prompt as build_opportunity_user_prompt,
+)
+from research.opportunity_prompt import (
+    opportunity_output_json_schema,
+)
 from research.synthesis import SynthesisOutput, SynthesisSchemaError
 from research.synthesis_prompt import (
     SYSTEM_PROMPT as SYNTHESIS_SYSTEM_PROMPT,
@@ -54,6 +65,9 @@ TOOL_NAME = "record_classification"
 # than a classification, and on models whose thinking is always on the thinking
 # tokens share this budget. Hitting the limit is a failure, never a partial result.
 SYNTHESIS_MAX_TOKENS = 16000
+# An opportunity-creation run reads far fewer, already-condensed insights, but
+# still needs room for several structured opportunities plus thinking tokens.
+OPPORTUNITY_MAX_TOKENS = 8000
 
 # Values Anthropic accepts for `output_config.effort` (adaptive-thinking depth).
 # Which of them a given model accepts varies (e.g. Haiku 4.5 rejects `effort`
@@ -140,6 +154,18 @@ class SynthesisProvider(Protocol):
 
         Returns a schema-valid output; whether it is supported by the evidence is
         checked by `research.synthesis_validation`.
+        """
+        ...
+
+
+class OpportunityProvider(Protocol):
+    model: str  # stored with each opportunity-creation run
+
+    def generate_opportunities(self, pack: OpportunityInputPack) -> OpportunityCreationOutput:
+        """Create opportunities from one input pack. Raises an `LLMError` subclass on failure.
+
+        Returns a schema-valid output; whether it is supported by the supplied
+        research and product context is checked by `research.opportunity_validation`.
         """
         ...
 
@@ -335,6 +361,20 @@ class AnthropicProvider:
             effort=parse_effort(settings.synthesis_effort),
         )
 
+    @classmethod
+    def for_opportunities(
+        cls, settings: Settings, *, transport: Transport | None = None, timeout: float = 120.0
+    ) -> AnthropicProvider:
+        """Opportunity creation reads a small, already-condensed prompt, but still
+        benefits from its own model/effort override, independent of synthesis."""
+        return cls(
+            settings.llm_api_key,
+            model=settings.opportunity_model or settings.llm_model or DEFAULT_MODEL,
+            timeout=timeout,
+            transport=transport,
+            effort=parse_effort(settings.opportunity_effort, source="OPPORTUNITY_EFFORT"),
+        )
+
     def classify_content(self, item: ClassificationInput) -> ClassificationResult:
         payload = {
             "model": self._model,
@@ -363,7 +403,7 @@ class AnthropicProvider:
         data = json.dumps(payload).encode("utf-8")
         # Diagnostics never include the key, headers, prompts or bodies: only
         # sizes, timings, the model name and token counts.
-        level = logging.INFO if purpose == "synthesis" else logging.DEBUG
+        level = logging.INFO if purpose in ("synthesis", "opportunity_creation") else logging.DEBUG
         log.log(
             level,
             "Anthropic %s request start: started=%s model=%s timeout=%gs streaming=off "
@@ -483,6 +523,70 @@ class AnthropicProvider:
         except SynthesisSchemaError as exc:
             raise LLMResponseError(
                 f"invalid synthesis: {exc}", raw=parsed, stop_reason=stop_reason
+            ) from exc
+
+    def generate_opportunities(self, pack: OpportunityInputPack) -> OpportunityCreationOutput:
+        # Same structured-outputs approach as synthesis (see the comment there):
+        # no per-model tool-choice branching, the API enforces the schema.
+        payload = {
+            "model": self._model,
+            "max_tokens": OPPORTUNITY_MAX_TOKENS,
+            "system": OPPORTUNITY_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": build_opportunity_user_prompt(pack)}],
+            "output_config": {
+                "format": {"type": "json_schema", "schema": opportunity_output_json_schema()}
+            },
+        }
+        if self._effort is not None:  # unset: nothing is sent, the model's default applies
+            payload["output_config"]["effort"] = self._effort
+        return self._parse_opportunities(self._post(payload, purpose="opportunity_creation"))
+
+    @staticmethod
+    def _parse_opportunities(body: bytes) -> OpportunityCreationOutput:
+        try:
+            data = json.loads(body)
+            blocks = data["content"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise LLMResponseError(
+                "response was not valid Messages API JSON", raw=body[:2000].decode("utf-8", "replace")
+            ) from exc
+        stop_reason = data.get("stop_reason") if isinstance(data, dict) else None
+        if stop_reason == "refusal":
+            details = data.get("stop_details") if isinstance(data, dict) else None
+            category = details.get("category") if isinstance(details, dict) else None
+            raise LLMResponseError(
+                f"the model declined the request (category: {category or 'unspecified'})",
+                raw=blocks, stop_reason=stop_reason,
+            )
+        if stop_reason == "max_tokens":
+            raise LLMResponseError(
+                "opportunity creation was truncated (max_tokens reached); no partial result is used",
+                raw=blocks, stop_reason=stop_reason,
+            )
+        text = next(
+            (
+                block["text"]
+                for block in (blocks if isinstance(blocks, list) else [])
+                if isinstance(block, dict) and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ),
+            None,
+        )
+        if text is None:
+            raise LLMResponseError(
+                "model did not return an opportunity result", raw=blocks, stop_reason=stop_reason
+            )
+        try:
+            parsed = json.loads(text)
+        except ValueError as exc:
+            raise LLMResponseError(
+                "opportunity result was not valid JSON", raw=text[:2000], stop_reason=stop_reason
+            ) from exc
+        try:
+            return OpportunityCreationOutput.from_dict(parsed)
+        except OpportunitySchemaError as exc:
+            raise LLMResponseError(
+                f"invalid opportunity result: {exc}", raw=parsed, stop_reason=stop_reason
             ) from exc
 
     @staticmethod

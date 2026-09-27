@@ -10,7 +10,7 @@ export default async function OpportunitiesPage() {
   const { data: opportunities, error } = await supabase
     .from("opportunities")
     .select(
-      "id, title, description, target_audience, pain_point, suggested_format, suggested_hook, reason, status, created_at, updated_at",
+      "id, title, audience, problem, opportunity, angle, marketing_objective, suggested_formats, cta_direction, confidence, limitations, created_at",
     )
     .order("created_at", { ascending: false });
 
@@ -34,37 +34,33 @@ export default async function OpportunitiesPage() {
             <tr>
               <th className="border px-2 py-1 text-left">Title</th>
               <th className="border px-2 py-1 text-left">Audience</th>
-              <th className="border px-2 py-1 text-left">Pain point</th>
-              <th className="border px-2 py-1 text-left">Format</th>
-              <th className="border px-2 py-1 text-left">Hook</th>
-              <th className="border px-2 py-1 text-left">Status</th>
+              <th className="border px-2 py-1 text-left">Problem</th>
+              <th className="border px-2 py-1 text-left">Opportunity</th>
+              <th className="border px-2 py-1 text-left">Angle</th>
+              <th className="border px-2 py-1 text-left">Objective</th>
+              <th className="border px-2 py-1 text-left">Formats</th>
+              <th className="border px-2 py-1 text-left">CTA direction</th>
+              <th className="border px-2 py-1 text-right">Confidence</th>
               <th className="border px-2 py-1 text-left">Created</th>
             </tr>
           </thead>
           <tbody>
-            {opportunities.map((opportunity) => (
-              <tr key={opportunity.id}>
+            {opportunities.map((row) => (
+              <tr key={row.id}>
+                <td className="border px-2 py-1">{row.title ?? "—"}</td>
+                <td className="border px-2 py-1">{row.audience ?? "—"}</td>
+                <td className="border px-2 py-1">{row.problem ?? "—"}</td>
+                <td className="border px-2 py-1">{row.opportunity ?? "—"}</td>
+                <td className="border px-2 py-1">{row.angle ?? "—"}</td>
+                <td className="border px-2 py-1">{row.marketing_objective ?? "—"}</td>
                 <td className="border px-2 py-1">
-                  {opportunity.title ?? "—"}
+                  {Array.isArray(row.suggested_formats) ? row.suggested_formats.join(", ") : "—"}
                 </td>
-                <td className="border px-2 py-1">
-                  {opportunity.target_audience ?? "—"}
+                <td className="border px-2 py-1">{row.cta_direction ?? "—"}</td>
+                <td className="border px-2 py-1 text-right">
+                  {typeof row.confidence === "number" ? row.confidence.toFixed(2) : "—"}
                 </td>
-                <td className="border px-2 py-1">
-                  {opportunity.pain_point ?? "—"}
-                </td>
-                <td className="border px-2 py-1">
-                  {opportunity.suggested_format ?? "—"}
-                </td>
-                <td className="border px-2 py-1">
-                  {opportunity.suggested_hook ?? "—"}
-                </td>
-                <td className="border px-2 py-1">
-                  {opportunity.status ?? "—"}
-                </td>
-                <td className="border px-2 py-1">
-                  {formatDate(opportunity.created_at)}
-                </td>
+                <td className="border px-2 py-1">{formatDate(row.created_at)}</td>
               </tr>
             ))}
           </tbody>

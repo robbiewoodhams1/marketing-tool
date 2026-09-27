@@ -28,6 +28,10 @@ class Settings:
     # Optional thinking effort for synthesis (`output_config.effort`). Unset means
     # "send nothing": the model's own default applies. Validated in research.llm.
     synthesis_effort: str | None = None
+    # Optional model for opportunity creation (falls back to llm_model, then the default).
+    opportunity_model: str | None = None
+    # Optional thinking effort for opportunity creation. Same semantics as synthesis_effort.
+    opportunity_effort: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -42,4 +46,6 @@ class Settings:
             llm_model=env.get("LLM_MODEL") or None,
             synthesis_model=env.get("SYNTHESIS_MODEL") or None,
             synthesis_effort=env.get("SYNTHESIS_EFFORT") or None,
+            opportunity_model=env.get("OPPORTUNITY_MODEL") or None,
+            opportunity_effort=env.get("OPPORTUNITY_EFFORT") or None,
         )
