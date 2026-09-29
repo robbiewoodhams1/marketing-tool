@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { StatusBadge } from "../_components/status-badge";
 import { formatDate, formatNumber } from "../_lib/format";
 import {
@@ -8,22 +9,26 @@ import {
   type SynthesisRun,
 } from "../_lib/synthesis";
 import { createClient } from "@/supabase/server";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { AlertTriangle, FileText, Lightbulb, Sparkles } from "lucide-react";
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 type Count = { value: number | null; error: string | null };
 
-function BackLink() {
-  return (
-    <p>
-      <Link href="/research" className="underline">
-        Back to Research
-      </Link>
-    </p>
-  );
-}
-
-// Every count is a head-only request, so no rows are transferred. A failed
-// count is reported as an error, never shown as 0.
 async function count(
   query: PromiseLike<{ count: number | null; error: { message: string } | null }>,
 ): Promise<Count> {
@@ -39,7 +44,6 @@ function loadCounts(supabase: Supabase, jobId: string) {
     supabase.from("content").select("id", head).eq("research_job_id", jobId);
   return Promise.all([
     count(content()),
-    // comments belong to a job through their content row
     count(
       supabase
         .from("comments")
@@ -47,9 +51,6 @@ function loadCounts(supabase: Supabase, jobId: string) {
         .eq("content.research_job_id", jobId),
     ),
     count(content().not("transcript", "is", null)),
-    // "Analysed" = the content has at least one classification interpretation
-    // (derived analysis lives in `interpretations`, not on `content`). The
-    // inner join keeps only such content rows, each counted once.
     count(
       supabase
         .from("content")
@@ -67,16 +68,12 @@ function loadCounts(supabase: Supabase, jobId: string) {
 }
 
 type SynthesisSummary = {
-  latest: SynthesisRun | null; // null: no synthesis has been run for this job
+  latest: SynthesisRun | null;
   runs: number;
-  insights: Count; // insights of the latest run
+  insights: Count;
   error: string | null;
 };
 
-// Insights belong to a synthesis run, and a job can have several runs (a new
-// model or prompt version adds a run; it never replaces one). So the count is
-// of the LATEST run's insights, not a sum across runs. Whether a synthesis
-// exists comes from the syntheses table, not from an empty insights count.
 async function loadSynthesisSummary(
   supabase: Supabase,
   jobId: string,
@@ -101,57 +98,45 @@ async function loadSynthesisSummary(
   return { latest: selection.run, runs: selection.runs.length, insights, error: null };
 }
 
-function Stat({
-  label,
-  count,
-  href,
-}: {
-  label: string;
-  count: Count;
-  href?: string;
-}) {
-  const card = (
-    <div
-      className={`rounded border border-foreground/15 p-4${
-        href ? " hover:bg-foreground/5" : ""
-      }`}
-    >
-      <p className="text-2xl font-semibold">
-        {count.error ? "—" : formatNumber(count.value)}
-      </p>
-      <p className="text-sm text-foreground/70">{label}</p>
-      {count.error && (
-        <p role="alert" className="mt-1 text-xs text-red-600">
-          Error: {count.error}
-        </p>
-      )}
-    </div>
-  );
-  return href ? (
-    <Link href={href} className="block">
-      {card}
-    </Link>
-  ) : (
-    card
-  );
+// Small previews so the tabs show real data, not just a link elsewhere - the
+// full tables still live at their own routes for anything beyond this.
+const PREVIEW_LIMIT = 5;
+
+async function loadContentPreview(supabase: Supabase, jobId: string) {
+  return supabase
+    .from("content")
+    .select("id, title, creator, platform, views, url")
+    .eq("research_job_id", jobId)
+    .order("created_at", { ascending: false })
+    .limit(PREVIEW_LIMIT);
 }
 
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="mt-10">
-      <h2 className="text-lg font-semibold">{title}</h2>
-      <p className="text-sm text-foreground/60">{description}</p>
-      <div className="mt-3">{children}</div>
-    </section>
+async function loadCommentsPreview(supabase: Supabase, jobId: string) {
+  return supabase
+    .from("comments")
+    .select("id, text, likes, content!inner(research_job_id)")
+    .eq("content.research_job_id", jobId)
+    .order("created_at", { ascending: false })
+    .limit(PREVIEW_LIMIT);
+}
+
+function Stat({ label, count, href }: { label: string; count: Count; href?: string }) {
+  const card = (
+    <Card className={href ? "transition-colors hover:bg-muted/50" : undefined}>
+      <CardContent>
+        <p className="text-2xl font-semibold tabular-nums">
+          {count.error ? "—" : formatNumber(count.value)}
+        </p>
+        <p className="text-sm text-muted-foreground">{label}</p>
+        {count.error && (
+          <p role="alert" className="mt-1 text-xs text-destructive">
+            Error: {count.error}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
+  return href ? <Link href={href}>{card}</Link> : card;
 }
 
 export default async function ResearchJobPage({
@@ -164,179 +149,275 @@ export default async function ResearchJobPage({
 
   const { data: job, error } = await supabase
     .from("research_jobs")
-    .select(
-      "id, query, audience, objective, status, started_at, completed_at, created_at",
-    )
+    .select("id, query, audience, objective, status, started_at, completed_at, created_at")
     .eq("id", id)
     .maybeSingle();
 
-  // An invalid UUID (e.g. a garbage path segment) fails at the database
-  // level rather than returning an empty result — treat it the same as
-  // "not found" instead of surfacing the raw Postgres error.
   const notFound = !error && !job;
   const isInvalidId = error?.code === "22P02";
 
   if (notFound || isInvalidId) {
     return (
-      <main className="p-8">
-        <p>Research job not found.</p>
-        <div className="mt-4">
-          <BackLink />
-        </div>
+      <main className="flex-1 p-6">
+        <Empty>
+          <EmptyMedia variant="icon">
+            <FileText />
+          </EmptyMedia>
+          <EmptyTitle>Research job not found</EmptyTitle>
+          <EmptyDescription>
+            <Button variant="link" render={<Link href="/research" />} nativeButton={false} className="p-0">
+              Back to Research
+            </Button>
+          </EmptyDescription>
+        </Empty>
       </main>
     );
   }
 
   if (error || !job) {
     return (
-      <main className="p-8">
-        <p role="alert" className="text-red-600">
-          Error loading research job: {error?.message}
-        </p>
-        <div className="mt-4">
-          <BackLink />
-        </div>
+      <main className="flex-1 p-6">
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Error loading research job</AlertTitle>
+          <AlertDescription>{error?.message}</AlertDescription>
+        </Alert>
       </main>
     );
   }
 
-  const [[videos, comments, transcripts, analysed, opportunities], synthesis] =
+  const [[content, comments, transcripts, analysed, opportunities], synthesis, contentPreview, commentsPreview] =
     await Promise.all([
       loadCounts(supabase, job.id),
       loadSynthesisSummary(supabase, job.id),
+      loadContentPreview(supabase, job.id),
+      loadCommentsPreview(supabase, job.id),
     ]);
 
   return (
-    <main className="max-w-5xl p-8">
-      <BackLink />
-
-      <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-xl font-bold">{job.query ?? "Research job"}</h1>
+    <main className="flex-1 space-y-6 p-6">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{job.query ?? "Research job"}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {job.audience ?? "No audience set"}
+          </p>
+        </div>
         <StatusBadge status={job.status} />
       </div>
 
       {job.status === "queued" && (
-        <p className="mt-3 rounded border border-foreground/15 bg-foreground/5 p-3 text-sm">
-          This research is queued. The research engine is not connected to the
-          dashboard yet, so nothing will be collected until it is.
-        </p>
+        <Alert>
+          <AlertDescription>
+            This research is queued. The research engine is not connected to the dashboard yet, so
+            nothing will be collected until it is.
+          </AlertDescription>
+        </Alert>
       )}
       {job.status === "failed" && (
-        <p className="mt-3 rounded border border-red-500/40 p-3 text-sm text-red-600">
-          This research job failed. Anything collected before the failure is
-          shown below and may be incomplete.
-        </p>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertDescription>
+            This research job failed. Anything collected before the failure is shown below and may
+            be incomplete.
+          </AlertDescription>
+        </Alert>
       )}
 
-      <Section
-        title="Configuration"
-        description="What you asked the system to research."
-      >
-        <dl className="grid gap-x-8 gap-y-3 text-sm md:grid-cols-[8rem_1fr]">
-          <dt className="text-foreground/60">Audience</dt>
-          <dd>{job.audience ?? "—"}</dd>
-          <dt className="text-foreground/60">Objective</dt>
-          <dd>{job.objective ?? "—"}</dd>
-          <dt className="text-foreground/60">Created</dt>
-          <dd>{formatDate(job.created_at)}</dd>
-          <dt className="text-foreground/60">Started</dt>
-          <dd>{formatDate(job.started_at)}</dd>
-          <dt className="text-foreground/60">Completed</dt>
-          <dd>{formatDate(job.completed_at)}</dd>
-        </dl>
-        <p className="mt-3 text-xs text-foreground/60">
-          Platform, depth and filters chosen when starting research are not
-          stored yet.
-        </p>
-      </Section>
+      <Card>
+        <CardHeader>
+          <CardTitle>Configuration</CardTitle>
+          <CardDescription>What you asked the system to research.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid gap-x-8 gap-y-3 text-sm md:grid-cols-[8rem_1fr]">
+            <dt className="text-muted-foreground">Audience</dt>
+            <dd>{job.audience ?? "—"}</dd>
+            <dt className="text-muted-foreground">Objective</dt>
+            <dd>{job.objective ?? "—"}</dd>
+            <dt className="text-muted-foreground">Created</dt>
+            <dd>{formatDate(job.created_at)}</dd>
+            <dt className="text-muted-foreground">Started</dt>
+            <dd>{formatDate(job.started_at)}</dd>
+            <dt className="text-muted-foreground">Completed</dt>
+            <dd>{formatDate(job.completed_at)}</dd>
+          </dl>
+        </CardContent>
+      </Card>
 
-      <Section title="Collection" description="What has been gathered.">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Stat
-            label="Videos"
-            count={videos}
-            href={`/research/content?job=${job.id}`}
-          />
-          <Stat
-            label="Comments"
-            count={comments}
-            href={`/research/comments?job=${job.id}`}
-          />
-          <Stat label="Transcripts" count={transcripts} />
-        </div>
-      </Section>
+      <Tabs defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="content">Content</TabsTrigger>
+          <TabsTrigger value="comments">Comments</TabsTrigger>
+          <TabsTrigger value="synthesis">Synthesis</TabsTrigger>
+          <TabsTrigger value="opportunities">Opportunities</TabsTrigger>
+        </TabsList>
 
-      <Section
-        title="Analysis"
-        description="Content in this job with at least one classification interpretation."
-      >
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Stat label="Analysed content" count={analysed} />
-        </div>
-        {analysed.value === 0 && (
-          <p className="mt-2 text-sm text-foreground/60">
-            No analysis has been run for this job yet.
-          </p>
-        )}
-      </Section>
+        <TabsContent value="overview" className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Stat label="Content" count={content} href={`/research/content?job=${job.id}`} />
+            <Stat label="Comments" count={comments} href={`/research/comments?job=${job.id}`} />
+            <Stat label="Transcripts" count={transcripts} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Stat label="Analysed content" count={analysed} />
+            <Stat label="Insights (latest synthesis)" count={synthesis.insights} href={insightsHref(job.id)} />
+            <Stat label="Opportunities" count={opportunities} />
+          </div>
+        </TabsContent>
 
-      <Section
-        title="Insights"
-        description="What the synthesis found across this job's evidence."
-      >
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Stat
-            label="Insights (latest synthesis)"
-            count={synthesis.insights}
-            href={insightsHref(job.id)}
-          />
-        </div>
-        {synthesis.error ? null : synthesis.latest ? (
-          <p className="mt-2 text-sm text-foreground/70">
-            Latest synthesis: {synthesis.latest.model} · {synthesis.latest.promptVersion} ·{" "}
-            {formatDate(synthesis.latest.createdAt)}
-            {synthesis.runs > 1 ? ` (${synthesis.runs} runs)` : ""}.{" "}
-            {synthesis.insights.value === 0 ? "It completed and found no insights. " : ""}
-            <Link href={insightsHref(job.id)} className="underline">
-              View insights and their evidence
-            </Link>
-          </p>
-        ) : (
-          <p className="mt-2 text-sm text-foreground/60">
-            No synthesis has been run for this job yet.
-          </p>
-        )}
-      </Section>
+        <TabsContent value="content">
+          <Card>
+            <CardHeader>
+              <CardTitle>Content</CardTitle>
+              <CardDescription>Most recently collected, {formatNumber(content.value)} total.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {contentPreview.data && contentPreview.data.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Title</TableHead>
+                      <TableHead>Platform</TableHead>
+                      <TableHead className="text-right">Views</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {contentPreview.data.map((c) => (
+                      <TableRow key={c.id}>
+                        <TableCell className="max-w-xs truncate">
+                          {c.url ? (
+                            <a href={c.url} target="_blank" rel="noopener noreferrer" className="underline">
+                              {c.title ?? c.url}
+                            </a>
+                          ) : (
+                            (c.title ?? "—")
+                          )}
+                        </TableCell>
+                        <TableCell>{c.platform ?? "—"}</TableCell>
+                        <TableCell className="text-right">{formatNumber(c.views)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <p className="text-sm text-muted-foreground">No content collected yet.</p>
+              )}
+            </CardContent>
+            <div className="px-6 pb-6">
+              <Button variant="link" className="px-0" render={<Link href={`/research/content?job=${job.id}`} />} nativeButton={false}>
+                View all content
+                <ArrowRight data-icon="inline-end" />
+              </Button>
+            </div>
+          </Card>
+        </TabsContent>
 
-      <Section
-        title="Opportunities"
-        description="What could become useful content."
-      >
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Stat label="Opportunities" count={opportunities} />
-        </div>
-      </Section>
+        <TabsContent value="comments">
+          <Card>
+            <CardHeader>
+              <CardTitle>Comments</CardTitle>
+              <CardDescription>Most recently collected, {formatNumber(comments.value)} total.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {commentsPreview.data && commentsPreview.data.length > 0 ? (
+                commentsPreview.data.map((c) => (
+                  <div key={c.id} className="rounded-md border p-3 text-sm">
+                    <p>{c.text ?? "—"}</p>
+                    {c.likes !== null && (
+                      <Badge variant="secondary" className="mt-2">
+                        {c.likes} likes
+                      </Badge>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">No comments collected yet.</p>
+              )}
+            </CardContent>
+            <div className="px-6 pb-6">
+              <Button variant="link" className="px-0" render={<Link href={`/research/comments?job=${job.id}`} />} nativeButton={false}>
+                View all comments
+                <ArrowRight data-icon="inline-end" />
+              </Button>
+            </div>
+          </Card>
+        </TabsContent>
 
-      <nav
-        aria-label="Browse collected data"
-        className="mt-10 flex flex-wrap gap-4 border-t border-foreground/15 pt-4 text-sm"
-      >
-        <span className="text-foreground/60">
-          Browse all (not filtered to this job):
-        </span>
-        <Link href="/research/content" className="underline">
-          Content
-        </Link>
-        <Link href="/research/comments" className="underline">
-          Comments
-        </Link>
-        <Link href="/research/insights" className="underline">
-          Insights
-        </Link>
-        <Link href="/research/opportunities" className="underline">
-          Opportunities
-        </Link>
-      </nav>
+        <TabsContent value="synthesis">
+          <Card>
+            <CardHeader>
+              <CardTitle>Synthesis</CardTitle>
+              <CardDescription>What the synthesis found across this job&apos;s evidence.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {synthesis.error ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{synthesis.error}</AlertDescription>
+                </Alert>
+              ) : synthesis.latest ? (
+                <div className="space-y-3 text-sm">
+                  <p>
+                    <span className="font-medium">{synthesis.latest.model}</span> ·{" "}
+                    {synthesis.latest.promptVersion} · {formatDate(synthesis.latest.createdAt)}
+                    {synthesis.runs > 1 ? ` (${synthesis.runs} runs)` : ""}
+                  </p>
+                  {synthesis.insights.value === 0 && (
+                    <p className="text-muted-foreground">It completed and found no insights.</p>
+                  )}
+                  <Button render={<Link href={insightsHref(job.id)} />} nativeButton={false}>
+                    <Lightbulb data-icon="inline-start" />
+                    View insights and their evidence
+                  </Button>
+                </div>
+              ) : (
+                <Empty>
+                  <EmptyMedia variant="icon">
+                    <Lightbulb />
+                  </EmptyMedia>
+                  <EmptyTitle>No synthesis yet</EmptyTitle>
+                  <EmptyDescription>
+                    No synthesis has been run for this job yet.
+                  </EmptyDescription>
+                </Empty>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="opportunities">
+          <Card>
+            <CardHeader>
+              <CardTitle>Opportunities</CardTitle>
+              <CardDescription>What could become useful content.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {opportunities.value === 0 ? (
+                <Empty>
+                  <EmptyMedia variant="icon">
+                    <Sparkles />
+                  </EmptyMedia>
+                  <EmptyTitle>No opportunities yet</EmptyTitle>
+                  <EmptyDescription>
+                    Opportunities are created from this job&apos;s synthesis once it has insights.
+                  </EmptyDescription>
+                </Empty>
+              ) : (
+                <Button render={<Link href="/research/opportunities" />} nativeButton={false}>
+                  <Sparkles data-icon="inline-start" />
+                  View {formatNumber(opportunities.value)} opportunities
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      <Separator />
+      <p className="text-sm text-muted-foreground">
+        Platform, depth and filters chosen when starting research are not stored yet.
+      </p>
     </main>
   );
 }

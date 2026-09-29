@@ -1,5 +1,16 @@
 import Link from "next/link";
 import { createClient } from "@/supabase/server";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { FileText } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { formatDate } from "../_lib/format";
 import { StatusBadge } from "./status-badge";
 
@@ -15,7 +26,7 @@ export async function RecentResearch() {
 
   if (error) {
     return (
-      <p role="alert" className="mt-4 text-red-600">
+      <p role="alert" className="mt-4 text-sm text-destructive">
         Error loading recent research: {error.message}
       </p>
     );
@@ -23,55 +34,61 @@ export async function RecentResearch() {
 
   if (!jobs || jobs.length === 0) {
     return (
-      <div className="mt-4 rounded border border-dashed border-foreground/25 p-6 text-sm">
-        <p className="font-medium">No research yet.</p>
-        <p className="mt-1 text-foreground/70">
-          Create your first research job above to start investigating your
-          market.
-        </p>
-      </div>
+      <Empty className="mt-4 border border-dashed">
+        <EmptyMedia variant="icon">
+          <FileText />
+        </EmptyMedia>
+        <EmptyTitle>No research yet</EmptyTitle>
+        <EmptyDescription>
+          Create your first research job above to start investigating your market.
+        </EmptyDescription>
+      </Empty>
     );
   }
 
   return (
-    <ul className="mt-4 divide-y divide-foreground/10 rounded border border-foreground/15">
-      {jobs.map((job) => (
-        <li key={job.id}>
-          <Link
-            href={`/research/${job.id}`}
-            className="grid gap-1 px-4 py-3 hover:bg-foreground/5 md:grid-cols-[1fr_9rem_15rem] md:items-center md:gap-4"
-          >
-            <span>
-              <span className="block font-medium">{job.query ?? "Untitled"}</span>
-              <span className="block text-sm text-foreground/60">
-                {job.audience ?? "No audience set"}
-              </span>
-            </span>
-            <StatusBadge status={job.status} />
-            <span className="text-sm text-foreground/60">
-              Created {formatDate(job.created_at)}
-              {job.completed_at && (
-                <span className="block">
-                  Completed {formatDate(job.completed_at)}
+    <Table className="mt-4">
+      <TableHeader>
+        <TableRow>
+          <TableHead>Query</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Created</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {jobs.map((job) => (
+          <TableRow key={job.id} className="cursor-pointer">
+            <TableCell className="p-0">
+              <Link href={`/research/${job.id}`} className="block px-4 py-3">
+                <span className="block font-medium">{job.query ?? "Untitled"}</span>
+                <span className="block text-sm text-muted-foreground">
+                  {job.audience ?? "No audience set"}
                 </span>
-              )}
-            </span>
-          </Link>
-        </li>
-      ))}
-    </ul>
+              </Link>
+            </TableCell>
+            <TableCell>
+              <Link href={`/research/${job.id}`} className="block px-4 py-3">
+                <StatusBadge status={job.status} />
+              </Link>
+            </TableCell>
+            <TableCell className="p-0 text-sm text-muted-foreground">
+              <Link href={`/research/${job.id}`} className="block px-4 py-3">
+                {formatDate(job.created_at)}
+                {job.completed_at && <span className="block">Completed {formatDate(job.completed_at)}</span>}
+              </Link>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 
 export function RecentResearchSkeleton() {
   return (
-    <div
-      aria-busy
-      aria-label="Loading recent research"
-      className="mt-4 space-y-px overflow-hidden rounded border border-foreground/15"
-    >
+    <div aria-busy aria-label="Loading recent research" className="mt-4 space-y-2">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="h-14 animate-pulse bg-foreground/5" />
+        <Skeleton key={i} className="h-14 w-full" />
       ))}
     </div>
   );

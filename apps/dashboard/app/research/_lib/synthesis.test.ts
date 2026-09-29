@@ -480,7 +480,15 @@ test("the insights page distinguishes no synthesis, a run that found nothing, an
   const page = readFileSync(join(appDir, "insights", "page.tsx"), "utf8");
   assert.match(page, /No synthesis has been run for this research job/);
   assert.match(page, /runOutcome\(run, insights\.length\)/);
-  assert.match(page, /role="alert"/);
+  // Errors render through the shared Alert component (variant="destructive"),
+  // not a literal `role="alert"` in this file - the accessible role itself is
+  // verified below, on the component every error/warning surface delegates to.
+  assert.match(page, /<Alert variant="destructive"/);
+  const alertComponent = readFileSync(
+    join(appDir, "..", "..", "components", "ui", "alert.tsx"),
+    "utf8",
+  );
+  assert.match(alertComponent, /role="alert"/);
   for (const f of ["loading.tsx", "error.tsx"]) {
     assert.ok(readFileSync(join(appDir, "insights", f), "utf8").length > 0);
   }

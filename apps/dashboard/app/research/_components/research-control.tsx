@@ -1,12 +1,24 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
 import { type StartResearchState, startResearch } from "../actions";
 import { DEPTHS, PLATFORMS } from "../_lib/research-config";
 import { ResearchFilters } from "./research-filters";
-
-const field =
-  "mt-1 w-full rounded border border-foreground/20 bg-background px-3 py-2 text-sm";
 
 export function ResearchControl() {
   const [state, setState] = useState<StartResearchState>({});
@@ -37,128 +49,103 @@ export function ResearchControl() {
           setState((s) => ({ ...s, errors: { ...s.errors, [name]: undefined } }));
       }}
       noValidate
-      className="mt-6 max-w-3xl space-y-6"
+      className="mt-6 max-w-3xl"
       aria-busy={pending}
     >
-      <div>
-        <label htmlFor="query" className="text-sm font-medium">
-          What do you want to learn?
-        </label>
-        <input
-          id="query"
-          name="query"
-          required
-          disabled={pending}
-          placeholder="UK sole trader accounting content"
-          aria-invalid={Boolean(errors.query)}
-          className={field}
-        />
-        {errors.query && (
-          <p className="mt-1 text-sm text-red-600">{errors.query}</p>
-        )}
-      </div>
-
-      <div className="grid gap-6 md:grid-cols-2">
-        <div>
-          <label htmlFor="audience" className="text-sm font-medium">
-            Audience
-          </label>
-          <input
-            id="audience"
-            name="audience"
+      <FieldGroup>
+        <Field data-invalid={Boolean(errors.query)}>
+          <FieldLabel htmlFor="query">What do you want to learn?</FieldLabel>
+          <Input
+            id="query"
+            name="query"
+            required
             disabled={pending}
-            placeholder="UK sole traders"
-            aria-invalid={Boolean(errors.audience)}
-            className={field}
+            placeholder="UK sole trader accounting content"
+            aria-invalid={Boolean(errors.query)}
           />
-          {errors.audience && (
-            <p className="mt-1 text-sm text-red-600">{errors.audience}</p>
-          )}
+          {errors.query && <FieldError>{errors.query}</FieldError>}
+        </Field>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <Field data-invalid={Boolean(errors.audience)}>
+            <FieldLabel htmlFor="audience">Audience</FieldLabel>
+            <Input
+              id="audience"
+              name="audience"
+              disabled={pending}
+              placeholder="UK sole traders"
+              aria-invalid={Boolean(errors.audience)}
+            />
+            {errors.audience && <FieldError>{errors.audience}</FieldError>}
+          </Field>
+          <Field data-invalid={Boolean(errors.objective)}>
+            <FieldLabel htmlFor="objective">Objective</FieldLabel>
+            <Textarea
+              id="objective"
+              name="objective"
+              rows={2}
+              disabled={pending}
+              placeholder="Find content that attracts potential TradeFlow users"
+              aria-invalid={Boolean(errors.objective)}
+            />
+            {errors.objective && <FieldError>{errors.objective}</FieldError>}
+          </Field>
         </div>
-        <div>
-          <label htmlFor="objective" className="text-sm font-medium">
-            Objective
-          </label>
-          <textarea
-            id="objective"
-            name="objective"
-            rows={2}
-            disabled={pending}
-            placeholder="Find content that attracts potential TradeFlow users"
-            aria-invalid={Boolean(errors.objective)}
-            className={field}
-          />
-          {errors.objective && (
-            <p className="mt-1 text-sm text-red-600">{errors.objective}</p>
-          )}
+
+        <div className="grid gap-6 md:grid-cols-2">
+          <FieldSet disabled={pending}>
+            <FieldLegend variant="label">Sources</FieldLegend>
+            <FieldGroup className="gap-2">
+              {PLATFORMS.map((p) => (
+                <Field key={p.id} orientation="horizontal">
+                  <Checkbox
+                    id={`platform-${p.id}`}
+                    name="platforms"
+                    value={p.id}
+                    defaultChecked={p.id === "youtube"}
+                    disabled={!p.available}
+                  />
+                  <FieldLabel htmlFor={`platform-${p.id}`} className="font-normal">
+                    {p.label}
+                    {!p.available && (
+                      <span className="text-xs text-muted-foreground"> Coming soon</span>
+                    )}
+                  </FieldLabel>
+                </Field>
+              ))}
+            </FieldGroup>
+            {errors.platforms && <FieldError>{errors.platforms}</FieldError>}
+          </FieldSet>
+
+          <FieldSet disabled={pending}>
+            <FieldLegend variant="label">Research depth</FieldLegend>
+            <RadioGroup name="depth" defaultValue="standard" className="flex flex-row gap-4">
+              {DEPTHS.map((d) => (
+                <Field key={d.id} orientation="horizontal">
+                  <RadioGroupItem id={`depth-${d.id}`} value={d.id} />
+                  <FieldLabel htmlFor={`depth-${d.id}`} className="font-normal">
+                    {d.label}
+                  </FieldLabel>
+                </Field>
+              ))}
+            </RadioGroup>
+            <FieldDescription>
+              Prepared, not yet applied: the research engine does not use depth yet.
+            </FieldDescription>
+          </FieldSet>
         </div>
-      </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <fieldset disabled={pending}>
-          <legend className="text-sm font-medium">Sources</legend>
-          <div className="mt-2 space-y-2">
-            {PLATFORMS.map((p) => (
-              <label
-                key={p.id}
-                className={`flex items-center gap-2 text-sm ${p.available ? "" : "text-foreground/50"}`}
-              >
-                <input
-                  type="checkbox"
-                  name="platforms"
-                  value={p.id}
-                  defaultChecked={p.id === "youtube"}
-                  disabled={!p.available}
-                />
-                {p.label}
-                {!p.available && <span className="text-xs">Coming soon</span>}
-              </label>
-            ))}
-          </div>
-          {errors.platforms && (
-            <p className="mt-1 text-sm text-red-600">{errors.platforms}</p>
-          )}
-        </fieldset>
+        <ResearchFilters disabled={pending} errors={errors} />
 
-        <fieldset disabled={pending}>
-          <legend className="text-sm font-medium">Research depth</legend>
-          <div className="mt-2 flex gap-4">
-            {DEPTHS.map((d) => (
-              <label key={d.id} className="flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name="depth"
-                  value={d.id}
-                  defaultChecked={d.id === "standard"}
-                />
-                {d.label}
-              </label>
-            ))}
-          </div>
-          <p className="mt-2 text-xs text-foreground/60">
-            Prepared, not yet applied: the research engine does not use depth
-            yet.
-          </p>
-        </fieldset>
-      </div>
+        {state.message && <FieldError>{state.message}</FieldError>}
 
-      <ResearchFilters disabled={pending} errors={errors} />
-
-      {state.message && (
-        <p role="alert" className="text-sm text-red-600">
-          {state.message}
-        </p>
-      )}
-
-      <div className="flex justify-end">
-        <button
-          type="submit"
-          disabled={pending}
-          className="rounded bg-foreground px-5 py-2 text-sm font-medium text-background disabled:opacity-50"
-        >
-          {pending ? "Starting…" : "Start research"}
-        </button>
-      </div>
+        <div className="flex justify-end">
+          <Button type="submit" disabled={pending}>
+            {pending && <Loader2 data-icon="inline-start" className="animate-spin" />}
+            {pending ? "Starting…" : "Start research"}
+          </Button>
+        </div>
+      </FieldGroup>
     </form>
   );
 }

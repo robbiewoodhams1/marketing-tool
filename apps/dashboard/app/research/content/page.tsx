@@ -1,4 +1,21 @@
+import { AlertTriangle, Boxes } from "lucide-react";
 import { createClient } from "@/supabase/server";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   classificationView,
   describeField,
@@ -19,42 +36,42 @@ function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
-const cell = "border px-2 py-1";
-
 // The derived cells for one row. Nothing here reads raw content columns.
 function ClassificationCells({ view }: { view: ClassificationView }) {
   if (view.kind !== "ok") {
     return (
       <>
-        <td className={`${cell} text-foreground/60`} colSpan={5}>
-          {view.kind === "none"
-            ? "Not classified"
-            : "Classification unreadable (malformed result)"}
-        </td>
-        <td className={`${cell} text-xs`}>
+        <TableCell colSpan={5} className="text-muted-foreground">
+          {view.kind === "none" ? "Not classified" : "Classification unreadable (malformed result)"}
+        </TableCell>
+        <TableCell className="text-xs">
           <Source view={view} />
-        </td>
+        </TableCell>
       </>
     );
   }
   const { fields } = view;
   return (
     <>
-      {(["topic", "pain_point", "hook", "hook_type", "format"] as const).map(
-        (name) => (
-          <td key={name} className={cell} title={describeField(fields[name])}>
-            {fields[name].value ?? "—"}
-          </td>
-        ),
-      )}
-      <td className={`${cell} text-xs`}>
+      {(["topic", "pain_point", "hook", "hook_type", "format"] as const).map((name) => (
+        <TableCell key={name}>
+          {describeField(fields[name]) ? (
+            <Tooltip>
+              <TooltipTrigger className="cursor-default">{fields[name].value ?? "—"}</TooltipTrigger>
+              <TooltipContent>{describeField(fields[name])}</TooltipContent>
+            </Tooltip>
+          ) : (
+            (fields[name].value ?? "—")
+          )}
+        </TableCell>
+      ))}
+      <TableCell className="text-xs">
         <Source view={view} />
-      </td>
+      </TableCell>
     </>
   );
 }
 
-// Which interpretation is being shown, and that others exist.
 function Source({ view }: { view: ClassificationView }) {
   if (view.kind === "none") return <>—</>;
   const { provenance, earlier } = view;
@@ -62,7 +79,7 @@ function Source({ view }: { view: ClassificationView }) {
     <>
       <span>{describeProvenance(provenance)}</span>
       <br />
-      <span className="text-foreground/60">
+      <span className="text-muted-foreground">
         {formatDate(provenance.createdAt)}
         {earlier > 0 ? ` · +${earlier} earlier` : ""}
       </span>
@@ -80,8 +97,8 @@ export default async function ContentPage({
 
   if (scope.state === "not-found" || scope.state === "error") {
     return (
-      <main className="p-8">
-        <h1 className="text-xl font-bold">Content</h1>
+      <main className="flex-1 p-6">
+        <h1 className="text-2xl font-semibold tracking-tight">Content</h1>
         <JobScopeProblem scope={scope} />
       </main>
     );
@@ -90,9 +107,6 @@ export default async function ContentPage({
   let query = supabase
     .from("content")
     .select(
-      // Raw evidence, plus each row's classification interpretations embedded
-      // in the same request (no N+1). Classification is derived analysis and
-      // comes only from `interpretations`, never from `content` columns.
       "id, research_job_id, platform, url, title, creator, published_at, views, likes, comments_count, created_at, interpretations(id, analysis_type, model, prompt_version, schema_version, result, created_at)",
     )
     .eq("interpretations.analysis_type", "classification")
@@ -102,100 +116,89 @@ export default async function ContentPage({
   const { data: content, error } = await query;
 
   return (
-    <main className="p-8">
-      <h1 className="text-xl font-bold">Content</h1>
+    <main className="flex-1 space-y-4 p-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Content</h1>
+        <p className="mt-1 text-muted-foreground">
+          Research evidence collected from the platforms you searched.
+        </p>
+      </div>
       {scope.state === "ok" && <JobScopeBanner scope={scope} noun="Content" />}
 
       {error && (
-        <p className="mt-4 text-red-600">
-          Error loading content: {error.message}
-        </p>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Error loading content</AlertTitle>
+          <AlertDescription>{error.message}</AlertDescription>
+        </Alert>
       )}
 
       {!error && content?.length === 0 && (
-        <p className="mt-4">
-          {scope.state === "ok"
-            ? "No content has been collected for this research job yet."
-            : "No content yet."}
-        </p>
+        <Empty>
+          <EmptyMedia variant="icon">
+            <Boxes />
+          </EmptyMedia>
+          <EmptyTitle>No content yet</EmptyTitle>
+          <EmptyDescription>
+            {scope.state === "ok"
+              ? "No content has been collected for this research job yet."
+              : "Start a research job to begin collecting content."}
+          </EmptyDescription>
+        </Empty>
       )}
 
       {!error && content && content.length > 0 && (
-        <table className="mt-4 border-collapse text-sm">
-          <thead>
-            <tr>
-              <th className="border px-2 py-1 text-left" colSpan={9}>
-                Raw content
-              </th>
-              <th
-                className="border bg-foreground/5 px-2 py-1 text-left"
-                colSpan={6}
-              >
-                Classification (derived — latest interpretation)
-              </th>
-            </tr>
-            <tr>
-              <th className="border px-2 py-1 text-left">Title</th>
-              <th className="border px-2 py-1 text-left">Platform</th>
-              <th className="border px-2 py-1 text-left">Creator</th>
-              <th className="border px-2 py-1 text-left">Published</th>
-              <th className="border px-2 py-1 text-right">Views</th>
-              <th className="border px-2 py-1 text-right">Likes</th>
-              <th className="border px-2 py-1 text-right">Comments</th>
-              <th className="border px-2 py-1 text-left">Job</th>
-              <th className="border px-2 py-1 text-left">Created</th>
-              <th className="border bg-foreground/5 px-2 py-1 text-left">Topic</th>
-              <th className="border bg-foreground/5 px-2 py-1 text-left">Pain point</th>
-              <th className="border bg-foreground/5 px-2 py-1 text-left">Hook</th>
-              <th className="border bg-foreground/5 px-2 py-1 text-left">Hook type</th>
-              <th className="border bg-foreground/5 px-2 py-1 text-left">Format</th>
-              <th className="border bg-foreground/5 px-2 py-1 text-left">Model · prompt</th>
-            </tr>
-          </thead>
-          <tbody>
-            {content.map((item) => (
-              <tr key={item.id}>
-                <td className="border px-2 py-1">
-                  {item.url ? (
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline"
-                    >
-                      {item.title ?? item.url}
-                    </a>
-                  ) : (
-                    (item.title ?? "—")
-                  )}
-                </td>
-                <td className="border px-2 py-1">{item.platform ?? "—"}</td>
-                <td className="border px-2 py-1">{item.creator ?? "—"}</td>
-                <td className="border px-2 py-1">
-                  {formatDate(item.published_at)}
-                </td>
-                <td className="border px-2 py-1 text-right">
-                  {formatNumber(item.views)}
-                </td>
-                <td className="border px-2 py-1 text-right">
-                  {formatNumber(item.likes)}
-                </td>
-                <td className="border px-2 py-1 text-right">
-                  {formatNumber(item.comments_count)}
-                </td>
-                <td className="border px-2 py-1 font-mono text-xs">
-                  {item.research_job_id?.slice(0, 8) ?? "—"}
-                </td>
-                <td className="border px-2 py-1">
-                  {formatDate(item.created_at)}
-                </td>
-                <ClassificationCells
-                  view={classificationView(item.interpretations)}
-                />
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead colSpan={7}>Raw content</TableHead>
+                <TableHead colSpan={6} className="bg-muted/50">
+                  Classification <span className="font-normal text-muted-foreground">(derived)</span>
+                </TableHead>
+              </TableRow>
+              <TableRow>
+                <TableHead>Title</TableHead>
+                <TableHead>Platform</TableHead>
+                <TableHead>Creator</TableHead>
+                <TableHead>Published</TableHead>
+                <TableHead className="text-right">Views</TableHead>
+                <TableHead className="text-right">Likes</TableHead>
+                <TableHead className="text-right">Comments</TableHead>
+                <TableHead className="bg-muted/50">Topic</TableHead>
+                <TableHead className="bg-muted/50">Pain point</TableHead>
+                <TableHead className="bg-muted/50">Hook</TableHead>
+                <TableHead className="bg-muted/50">Hook type</TableHead>
+                <TableHead className="bg-muted/50">Format</TableHead>
+                <TableHead className="bg-muted/50">Model · prompt</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {content.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="max-w-xs truncate">
+                    {item.url ? (
+                      <a href={item.url} target="_blank" rel="noopener noreferrer" className="underline">
+                        {item.title ?? item.url}
+                      </a>
+                    ) : (
+                      (item.title ?? "—")
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{item.platform ?? "—"}</Badge>
+                  </TableCell>
+                  <TableCell>{item.creator ?? "—"}</TableCell>
+                  <TableCell>{formatDate(item.published_at)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(item.views)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(item.likes)}</TableCell>
+                  <TableCell className="text-right">{formatNumber(item.comments_count)}</TableCell>
+                  <ClassificationCells view={classificationView(item.interpretations)} />
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </main>
   );

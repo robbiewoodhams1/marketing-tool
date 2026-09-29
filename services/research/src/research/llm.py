@@ -44,6 +44,17 @@ from research.opportunity_prompt import (
 from research.opportunity_prompt import (
     opportunity_output_json_schema,
 )
+from research.production_pack import ProductionInputPack
+from research.production_prompt import (
+    SYSTEM_PROMPT as PRODUCTION_SYSTEM_PROMPT,
+)
+from research.production_prompt import (
+    build_user_prompt as build_production_user_prompt,
+)
+from research.production_prompt import (
+    production_output_json_schema,
+)
+from research.production_schema import ProductionOutput, ProductionSchemaError
 from research.synthesis import SynthesisOutput, SynthesisSchemaError
 from research.synthesis_prompt import (
     SYSTEM_PROMPT as SYNTHESIS_SYSTEM_PROMPT,
@@ -68,6 +79,9 @@ SYNTHESIS_MAX_TOKENS = 16000
 # An opportunity-creation run reads far fewer, already-condensed insights, but
 # still needs room for several structured opportunities plus thinking tokens.
 OPPORTUNITY_MAX_TOKENS = 8000
+# A production is one script (hook + a handful of short scenes + cta/caption),
+# smaller than an opportunity-creation run's several opportunities.
+PRODUCTION_MAX_TOKENS = 8000
 
 # Values Anthropic accepts for `output_config.effort` (adaptive-thinking depth).
 # Which of them a given model accepts varies (e.g. Haiku 4.5 rejects `effort`
@@ -166,6 +180,19 @@ class OpportunityProvider(Protocol):
 
         Returns a schema-valid output; whether it is supported by the supplied
         research and product context is checked by `research.opportunity_validation`.
+        """
+        ...
+
+
+class ProductionProvider(Protocol):
+    model: str  # stored with each production run
+
+    def generate_production(self, pack: ProductionInputPack) -> ProductionOutput:
+        """Produce a short-form video package from one input pack. Raises an
+        `LLMError` subclass on failure.
+
+        Returns a schema-valid output; whether it is supported by the supplied
+        opportunity and product context is checked by `research.production_validation`.
         """
         ...
 
@@ -375,6 +402,21 @@ class AnthropicProvider:
             effort=parse_effort(settings.opportunity_effort, source="OPPORTUNITY_EFFORT"),
         )
 
+    @classmethod
+    def for_production(
+        cls, settings: Settings, *, transport: Transport | None = None, timeout: float = 120.0
+    ) -> AnthropicProvider:
+        """Production reads a small, already-condensed prompt (one opportunity, one
+        product profile), but still benefits from its own model/effort override,
+        independent of synthesis and opportunity creation."""
+        return cls(
+            settings.llm_api_key,
+            model=settings.production_model or settings.llm_model or DEFAULT_MODEL,
+            timeout=timeout,
+            transport=transport,
+            effort=parse_effort(settings.production_effort, source="PRODUCTION_EFFORT"),
+        )
+
     def classify_content(self, item: ClassificationInput) -> ClassificationResult:
         payload = {
             "model": self._model,
@@ -403,7 +445,7 @@ class AnthropicProvider:
         data = json.dumps(payload).encode("utf-8")
         # Diagnostics never include the key, headers, prompts or bodies: only
         # sizes, timings, the model name and token counts.
-        level = logging.INFO if purpose in ("synthesis", "opportunity_creation") else logging.DEBUG
+        level = logging.INFO if purpose in ("synthesis", "opportunity_creation", "production") else logging.DEBUG
         log.log(
             level,
             "Anthropic %s request start: started=%s model=%s timeout=%gs streaming=off "
@@ -587,6 +629,71 @@ class AnthropicProvider:
         except OpportunitySchemaError as exc:
             raise LLMResponseError(
                 f"invalid opportunity result: {exc}", raw=parsed, stop_reason=stop_reason
+            ) from exc
+
+    def generate_production(self, pack: ProductionInputPack) -> ProductionOutput:
+        # Same structured-outputs approach as synthesis/opportunities (see the
+        # comment on synthesize_research): no per-model tool-choice branching,
+        # the API enforces the schema.
+        payload = {
+            "model": self._model,
+            "max_tokens": PRODUCTION_MAX_TOKENS,
+            "system": PRODUCTION_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": build_production_user_prompt(pack)}],
+            "output_config": {
+                "format": {"type": "json_schema", "schema": production_output_json_schema()}
+            },
+        }
+        if self._effort is not None:  # unset: nothing is sent, the model's default applies
+            payload["output_config"]["effort"] = self._effort
+        return self._parse_production(self._post(payload, purpose="production"))
+
+    @staticmethod
+    def _parse_production(body: bytes) -> ProductionOutput:
+        try:
+            data = json.loads(body)
+            blocks = data["content"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise LLMResponseError(
+                "response was not valid Messages API JSON", raw=body[:2000].decode("utf-8", "replace")
+            ) from exc
+        stop_reason = data.get("stop_reason") if isinstance(data, dict) else None
+        if stop_reason == "refusal":
+            details = data.get("stop_details") if isinstance(data, dict) else None
+            category = details.get("category") if isinstance(details, dict) else None
+            raise LLMResponseError(
+                f"the model declined the request (category: {category or 'unspecified'})",
+                raw=blocks, stop_reason=stop_reason,
+            )
+        if stop_reason == "max_tokens":
+            raise LLMResponseError(
+                "production was truncated (max_tokens reached); no partial result is used",
+                raw=blocks, stop_reason=stop_reason,
+            )
+        text = next(
+            (
+                block["text"]
+                for block in (blocks if isinstance(blocks, list) else [])
+                if isinstance(block, dict) and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ),
+            None,
+        )
+        if text is None:
+            raise LLMResponseError(
+                "model did not return a production", raw=blocks, stop_reason=stop_reason
+            )
+        try:
+            parsed = json.loads(text)
+        except ValueError as exc:
+            raise LLMResponseError(
+                "production was not valid JSON", raw=text[:2000], stop_reason=stop_reason
+            ) from exc
+        try:
+            return ProductionOutput.from_dict(parsed)
+        except ProductionSchemaError as exc:
+            raise LLMResponseError(
+                f"invalid production: {exc}", raw=parsed, stop_reason=stop_reason
             ) from exc
 
     @staticmethod

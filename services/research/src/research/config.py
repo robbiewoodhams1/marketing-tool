@@ -32,6 +32,22 @@ class Settings:
     opportunity_model: str | None = None
     # Optional thinking effort for opportunity creation. Same semantics as synthesis_effort.
     opportunity_effort: str | None = None
+    # Optional model for production (falls back to llm_model, then the default).
+    production_model: str | None = None
+    # Optional thinking effort for production. Same semantics as synthesis_effort.
+    production_effort: str | None = None
+    # Secret, media generation only: the Gemini API's own credential (not llm_api_key -
+    # media generation is a different vendor from the Anthropic-backed stages above).
+    gemini_api_key: str | None = None
+    # Optional provider/model overrides for media generation (defaults set in
+    # research.gemini / research.media). MEDIA_VIDEO_PROVIDER has no V1
+    # implementation; it is read so a future provider needs no config changes.
+    media_image_provider: str | None = None
+    media_image_model: str | None = None
+    media_video_provider: str | None = None
+    media_video_model: str | None = None
+    # Supabase Storage bucket generated assets are uploaded to.
+    media_storage_bucket: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -48,4 +64,12 @@ class Settings:
             synthesis_effort=env.get("SYNTHESIS_EFFORT") or None,
             opportunity_model=env.get("OPPORTUNITY_MODEL") or None,
             opportunity_effort=env.get("OPPORTUNITY_EFFORT") or None,
+            production_model=env.get("PRODUCTION_MODEL") or None,
+            production_effort=env.get("PRODUCTION_EFFORT") or None,
+            gemini_api_key=env.get("GEMINI_API_KEY") or None,
+            media_image_provider=env.get("MEDIA_IMAGE_PROVIDER") or None,
+            media_image_model=env.get("MEDIA_IMAGE_MODEL") or None,
+            media_video_provider=env.get("MEDIA_VIDEO_PROVIDER") or None,
+            media_video_model=env.get("MEDIA_VIDEO_MODEL") or None,
+            media_storage_bucket=env.get("MEDIA_STORAGE_BUCKET") or None,
         )

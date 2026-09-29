@@ -1,6 +1,9 @@
 "use client"; // Error boundaries must be Client Components
 
 import { useEffect } from "react";
+import { AlertTriangle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
 // In this Next.js version the boundary receives `retry` (not `reset`).
 export default function InsightsError({
@@ -15,21 +18,18 @@ export default function InsightsError({
   }, [error]);
 
   return (
-    <main className="max-w-5xl p-8">
-      <h1 className="text-xl font-bold">Insights</h1>
-      <p role="alert" className="mt-4 text-red-600">
-        Something went wrong while showing insights.
-      </p>
-      <p className="mt-1 text-sm text-foreground/60">
-        The insights and their evidence are stored safely; this is a display problem.
-      </p>
-      <button
-        type="button"
-        onClick={() => retry()}
-        className="mt-4 rounded border border-foreground/30 px-3 py-1 text-sm hover:bg-foreground/5"
-      >
+    <main className="max-w-5xl flex-1 p-6">
+      <h1 className="text-2xl font-semibold tracking-tight">Insights</h1>
+      <Alert variant="destructive" className="mt-4">
+        <AlertTriangle />
+        <AlertTitle>Something went wrong while showing insights</AlertTitle>
+        <AlertDescription>
+          The insights and their evidence are stored safely; this is a display problem.
+        </AlertDescription>
+      </Alert>
+      <Button variant="outline" className="mt-4" onClick={() => retry()}>
         Try again
-      </button>
+      </Button>
     </main>
   );
 }

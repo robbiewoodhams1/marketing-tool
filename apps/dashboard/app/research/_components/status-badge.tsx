@@ -1,19 +1,15 @@
-const STATUSES: Record<string, { label: string; dot: string }> = {
-  queued: { label: "Queued", dot: "bg-foreground/40" },
-  running: { label: "Running", dot: "bg-blue-500" },
-  completed: { label: "Complete", dot: "bg-green-500" },
-  failed: { label: "Failed", dot: "bg-red-500" },
+import { Badge } from "@/components/ui/badge";
+
+// Semantic status -> Badge variant + label. Colour is used only for meaning
+// (running/complete/failed/pending), never decoration.
+const STATUSES: Record<string, { label: string; variant: "secondary" | "default" | "destructive" | "outline" }> = {
+  queued: { label: "Queued", variant: "outline" },
+  running: { label: "Running", variant: "default" },
+  completed: { label: "Complete", variant: "secondary" },
+  failed: { label: "Failed", variant: "destructive" },
 };
 
 export function StatusBadge({ status }: { status: string | null }) {
   const known = status ? STATUSES[status] : undefined;
-  return (
-    <span className="inline-flex items-center gap-2 text-sm">
-      <span
-        aria-hidden
-        className={`h-2 w-2 rounded-full ${known?.dot ?? "bg-foreground/40"}`}
-      />
-      {known?.label ?? status ?? "Unknown"}
-    </span>
-  );
+  return <Badge variant={known?.variant ?? "outline"}>{known?.label ?? status ?? "Unknown"}</Badge>;
 }

@@ -1,5 +1,16 @@
 import Link from "next/link";
+import { Lightbulb } from "lucide-react";
 import { createClient } from "@/supabase/server";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { InsightCard } from "../_components/insight-card";
 import { SynthesisProvenance } from "../_components/synthesis-provenance";
 import { formatDate } from "../_lib/format";
@@ -27,9 +38,11 @@ function first(value: string | string[] | undefined): string | undefined {
 
 function ErrorMessage({ what, message }: { what: string; message: string }) {
   return (
-    <p role="alert" className="mt-4 text-red-600">
-      Error loading {what}: {message}
-    </p>
+    <Alert variant="destructive" className="mt-4">
+      <AlertDescription>
+        Error loading {what}: {message}
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -40,46 +53,51 @@ async function AllSyntheses({ supabase }: { supabase: Supabase }) {
   const runs = loaded.data;
   if (runs.length === 0) {
     return (
-      <p className="mt-4">
-        No synthesis has been run for any research job yet. Insights are produced by a
-        synthesis run over a research job&apos;s collected evidence.
-      </p>
+      <Empty className="mt-4">
+        <EmptyMedia variant="icon">
+          <Lightbulb />
+        </EmptyMedia>
+        <EmptyTitle>No synthesis has been run yet</EmptyTitle>
+        <EmptyDescription>
+          Insights are produced by a synthesis run over a research job&apos;s collected evidence.
+        </EmptyDescription>
+      </Empty>
     );
   }
   return (
     <>
-      <p className="mt-2 text-sm text-foreground/70">
-        Insights belong to a research job. Choose a synthesis to see its insights and the
-        evidence behind them.
+      <p className="mt-2 text-sm text-muted-foreground">
+        Insights belong to a research job. Choose a synthesis to see its insights and the evidence
+        behind them.
       </p>
-      <table className="mt-4 border-collapse text-sm">
-        <thead>
-          <tr>
-            <th className="border px-2 py-1 text-left">Research job</th>
-            <th className="border px-2 py-1 text-left">Model</th>
-            <th className="border px-2 py-1 text-left">Prompt</th>
-            <th className="border px-2 py-1 text-left">Run</th>
-            <th className="border px-2 py-1 text-right">Insights</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table className="mt-4">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Research job</TableHead>
+            <TableHead>Model</TableHead>
+            <TableHead>Prompt</TableHead>
+            <TableHead>Run</TableHead>
+            <TableHead className="text-right">Insights</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {runs.map((run) => (
-            <tr key={run.id}>
-              <td className="border px-2 py-1">
+            <TableRow key={run.id}>
+              <TableCell>
                 <Link href={insightsHref(run.researchJobId, run.id)} className="underline">
                   {run.researchJobQuery ?? "Untitled research"}
                 </Link>
-              </td>
-              <td className="border px-2 py-1">{run.model}</td>
-              <td className="border px-2 py-1">{run.promptVersion}</td>
-              <td className="border px-2 py-1">{formatDate(run.createdAt)}</td>
-              <td className="border px-2 py-1 text-right">
+              </TableCell>
+              <TableCell>{run.model}</TableCell>
+              <TableCell>{run.promptVersion}</TableCell>
+              <TableCell>{formatDate(run.createdAt)}</TableCell>
+              <TableCell className="text-right">
                 {run.insightCount === null ? "—" : run.insightCount === 0 ? "none found" : run.insightCount}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </>
   );
 }
@@ -98,24 +116,24 @@ async function JobInsights({
 
   const selection = selectRun(loaded.data, requested);
 
-  // "No synthesis has been run" is decided by the absence of a synthesis row,
-  // never inferred from an empty insights query.
   if (selection.kind === "none") {
     return (
-      <div className="mt-4">
-        <p>No synthesis has been run for this research job.</p>
-        <p className="mt-1 text-sm text-foreground/60">
-          Insights appear here once a synthesis has analysed this job&apos;s content and
-          comments.
-        </p>
-      </div>
+      <Empty className="mt-4">
+        <EmptyMedia variant="icon">
+          <Lightbulb />
+        </EmptyMedia>
+        <EmptyTitle>No synthesis has been run for this research job</EmptyTitle>
+        <EmptyDescription>
+          Insights appear here once a synthesis has analysed this job&apos;s content and comments.
+        </EmptyDescription>
+      </Empty>
     );
   }
   if (selection.kind === "not-found") {
     return (
-      <div className="mt-4">
+      <div className="mt-4 text-sm">
         <p>That synthesis run was not found for this research job.</p>
-        <p className="mt-2 text-sm">
+        <p className="mt-2">
           <Link href={insightsHref(jobId)} className="underline">
             Show the latest synthesis
           </Link>
@@ -148,14 +166,14 @@ async function JobInsights({
       ))}
 
       {outcome.kind === "found-nothing" ? (
-        <p className="mt-6 rounded border border-foreground/15 bg-foreground/5 p-4 text-sm">
-          {outcome.message}
-        </p>
+        <Alert className="mt-6">
+          <AlertDescription>{outcome.message}</AlertDescription>
+        </Alert>
       ) : (
         <div className="mt-6 space-y-6">
-          <p className="text-sm text-foreground/70">
-            {insights.length} insight{insights.length === 1 ? "" : "s"}, in no particular
-            order. Confidence is the synthesis model&apos;s own estimate.
+          <p className="text-sm text-muted-foreground">
+            {insights.length} insight{insights.length === 1 ? "" : "s"}, in no particular order.
+            Confidence is the synthesis model&apos;s own estimate.
           </p>
           {insights.map((insight) => (
             <InsightCard key={insight.id} insight={insight} />
@@ -173,16 +191,21 @@ export default async function InsightsPage({ searchParams }: { searchParams: Sea
 
   if (scope.state === "not-found" || scope.state === "error") {
     return (
-      <main className="p-8">
-        <h1 className="text-xl font-bold">Insights</h1>
+      <main className="flex-1 p-6">
+        <h1 className="text-2xl font-semibold tracking-tight">Insights</h1>
         <JobScopeProblem scope={scope} />
       </main>
     );
   }
 
   return (
-    <main className="max-w-5xl p-8">
-      <h1 className="text-xl font-bold">Insights</h1>
+    <main className="max-w-5xl flex-1 p-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Insights</h1>
+        <p className="mt-1 text-muted-foreground">
+          What the synthesis found across your research, with the evidence behind each finding.
+        </p>
+      </div>
       {scope.state === "ok" ? (
         <>
           <JobScopeBanner scope={scope} noun="Insights" />

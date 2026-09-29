@@ -548,6 +548,9 @@ def test_migration_writes_through_one_atomic_function_only_the_service_role_can_
     assert "policy" not in sql.split("create function public.save_opportunities")[1]
 
 
-def test_this_is_the_latest_migration():
+def test_earlier_migrations_are_not_rewritten_by_this_chapter():
     names = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
-    assert names.index(next(n for n in names if "create_opportunity_runs" in n)) == len(names) - 1
+    # Exactly six migrations predate this chapter's; it lands immediately
+    # after them. A later chapter (e.g. production) may add further
+    # migrations after this one without this assertion becoming false.
+    assert names.index(next(n for n in names if "create_opportunity_runs" in n)) == 6

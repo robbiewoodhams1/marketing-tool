@@ -1,11 +1,13 @@
+import { Skeleton } from "@/components/ui/skeleton";
+
 export default function Loading() {
   return (
-    <main className="max-w-5xl p-8" aria-busy aria-label="Loading research job">
-      <div className="h-6 w-64 animate-pulse rounded bg-foreground/10" />
-      <div className="mt-8 h-24 animate-pulse rounded bg-foreground/5" />
-      <div className="mt-8 grid gap-4 sm:grid-cols-3">
+    <main className="flex-1 space-y-8 p-6" aria-busy aria-label="Loading research job">
+      <Skeleton className="h-8 w-64" />
+      <Skeleton className="h-32 w-full" />
+      <div className="grid gap-4 sm:grid-cols-3">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-20 animate-pulse rounded bg-foreground/5" />
+          <Skeleton key={i} className="h-24 w-full" />
         ))}
       </div>
     </main>
