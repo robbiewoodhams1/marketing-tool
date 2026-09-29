@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from research.media_direction import MediaDirection
 from research.media_schema import AssetType
 from research.product_context import ProductProfile
 
@@ -50,21 +51,50 @@ class MediaScenePack:
 
 
 def build_scene_prompt(
-    *, production: Mapping[str, Any], scene: Mapping[str, Any], product: ProductProfile
+    *,
+    production: Mapping[str, Any],
+    scene: Mapping[str, Any],
+    product: ProductProfile,
+    asset_type: AssetType = AssetType.IMAGE,
+    direction: MediaDirection | None = None,
 ) -> str:
-    """Plain text assembly. Contains only what a generator needs: the scene's
-    own purpose/visual direction/on-screen text, the real capabilities this
-    scene is allowed to show (with their real descriptions), and an explicit
-    negative list drawn from the product's own `out_of_scope`. Never the
-    marketing strategy, the CTA, the evidence, or the opportunity - those
-    decisions were already made upstream."""
-    lines = [
-        f"Still-frame visual for one scene of a short-form video for the product {product.name}.",
-        f"Scene purpose: {scene.get('purpose')}",
-        f"Visual direction: {scene.get('visual_direction')}",
-    ]
-    if scene.get("on_screen_text"):
-        lines.append(f'On-screen text to render legibly in the shot: "{scene["on_screen_text"]}"')
+    """Plain text assembly, in three layers, in this order:
+
+    1. Production scene requirements: the scene's own purpose/visual
+       direction/on-screen text, the real capabilities this scene is allowed
+       to show (with their real descriptions), and an explicit negative list
+       drawn from the product's own `out_of_scope`. Never the marketing
+       strategy, the CTA, the evidence, or the opportunity - those decisions
+       were already made upstream, and never the voiceover: Media Generation
+       executes the visual, it does not narrate.
+    2. Media Direction (see `research.media_direction`): optional,
+       human-edited HOW-to-depict-it guidance. Advisory only - it can never
+       add a product capability beyond what layer 1 already allows
+       (`research.media_validation` enforces this regardless of what
+       direction text says).
+    3. Provider-specific requirements: style/negative-prompt boilerplate the
+       provider needs, independent of any human input.
+
+    For video (Media V2), on-screen text is deliberately NOT asked of the
+    provider: burning text into the generated clip would conflict with a
+    future deterministic caption/overlay system, and Veo's text rendering is
+    not reliable enough to trust for anything Production actually wrote."""
+    if asset_type is AssetType.VIDEO:
+        duration = scene.get("duration_seconds")
+        lines = [
+            f"Short video clip (approximately {duration}s) for one scene of a short-form video "
+            f"for the product {product.name}.",
+            f"Scene purpose: {scene.get('purpose')}",
+            f"Visual direction: {scene.get('visual_direction')}",
+        ]
+    else:
+        lines = [
+            f"Still-frame visual for one scene of a short-form video for the product {product.name}.",
+            f"Scene purpose: {scene.get('purpose')}",
+            f"Visual direction: {scene.get('visual_direction')}",
+        ]
+        if scene.get("on_screen_text"):
+            lines.append(f'On-screen text to render legibly in the shot: "{scene["on_screen_text"]}"')
 
     capability_keys = tuple(scene.get("product_capability_refs") or [])
     capability_lines = [
@@ -83,10 +113,27 @@ def build_scene_prompt(
             "Do NOT depict, imply, or add on-screen text about any of the following, which "
             f"{product.name} does not do: " + ", ".join(product.out_of_scope) + "."
         )
-    lines.append(
-        "Style: clean, modern, authentic mobile-first short-form video look. No fabricated "
-        "logos, brand names, or UI beyond what is described above."
-    )
+
+    # Layer 2: Media Direction - optional, human-edited, advisory only.
+    if direction is not None and not direction.is_empty():
+        lines.append(
+            "Human-directed visual guidance (describes HOW to depict the above; it does not add "
+            "or remove any product capability):"
+        )
+        lines.extend(direction.to_prompt_lines())
+
+    # Layer 3: provider-specific requirements.
+    if asset_type is AssetType.VIDEO:
+        lines.append(
+            "Style: clean, modern, authentic mobile-first short-form video look; natural motion; "
+            "no fabricated logos or UI beyond what is described above. Do not render any on-screen "
+            "text, captions or subtitles into the video - captions are added separately afterwards."
+        )
+    else:
+        lines.append(
+            "Style: clean, modern, authentic mobile-first short-form video look. No fabricated "
+            "logos, brand names, or UI beyond what is described above."
+        )
     return "\n".join(lines)
 
 
@@ -96,9 +143,12 @@ def build_media_scene_pack(
     scene: Mapping[str, Any],
     product: ProductProfile,
     asset_type: AssetType = AssetType.IMAGE,
+    direction: MediaDirection | None = None,
 ) -> MediaScenePack:
     aspect_ratio = aspect_ratio_for_platform(production.get("platform"))
-    prompt = build_scene_prompt(production=production, scene=scene, product=product)
+    prompt = build_scene_prompt(
+        production=production, scene=scene, product=product, asset_type=asset_type, direction=direction
+    )
     capability_keys = tuple(scene.get("product_capability_refs") or [])
     manifest = {
         "pack_version": MEDIA_PACK_VERSION,
@@ -107,6 +157,7 @@ def build_media_scene_pack(
         "asset_type": asset_type.value,
         "aspect_ratio": aspect_ratio,
         "platform": production.get("platform"),
+        "media_direction_applied": direction is not None and not direction.is_empty(),
         "product_key": product.key,
         "product_version": product.version,
         "capability_keys": list(capability_keys),

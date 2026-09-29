@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/collapsible";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
+import { fieldCount, type MediaDirectionRow } from "./_lib/media-direction";
+import { MediaDirectionForm } from "./_components/media-direction-form";
 
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : "—";
@@ -70,6 +72,16 @@ export default async function ProductionPage() {
   const opportunityTitle = new Map((opportunities ?? []).map((o) => [o.id, o.title]));
 
   const productionIds = (productions ?? []).map((p) => p.id);
+  const { data: directionRows } = productionIds.length
+    ? await supabase
+        .from("media_directions")
+        .select(
+          "production_id, updated_at, target_subject, appearance, setting, visual_style, camera_composition, lighting, avoid, custom_instructions, additional_direction",
+        )
+        .in("production_id", productionIds)
+    : { data: [] as ({ production_id: string; updated_at: string } & MediaDirectionRow)[] };
+  const directionByProduction = new Map((directionRows ?? []).map((d) => [d.production_id, d]));
+
   const { data: mediaAssetRows } = productionIds.length
     ? await supabase
         .from("media_assets")
@@ -211,6 +223,40 @@ export default async function ProductionPage() {
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <pre className="mt-1 rounded-md bg-muted/50 p-3 text-xs whitespace-pre-wrap">{p.script}</pre>
+                  </CollapsibleContent>
+                </Collapsible>
+
+                <Separator />
+
+                <Collapsible>
+                  <CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium hover:underline">
+                    Media direction
+                    {(() => {
+                      const count = fieldCount(directionByProduction.get(p.id));
+                      return count > 0 ? (
+                        <Badge variant="secondary" className="font-normal">
+                          {count} field{count === 1 ? "" : "s"} set
+                        </Badge>
+                      ) : (
+                        <span className="text-xs font-normal text-muted-foreground">Not set</span>
+                      );
+                    })()}
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      How generated media should visually depict this production - reused across
+                      regenerations, never part of the production spec itself.
+                    </p>
+                    <MediaDirectionForm
+                      // Remounts with fresh uncontrolled defaultValues whenever
+                      // the saved row actually changes (e.g. right after this
+                      // form's own save triggers revalidation) - otherwise Base
+                      // UI warns about an uncontrolled field's default value
+                      // changing after the input already mounted.
+                      key={`${p.id}:${directionByProduction.get(p.id)?.updated_at ?? "unsaved"}`}
+                      productionId={p.id}
+                      initial={directionByProduction.get(p.id) ?? null}
+                    />
                   </CollapsibleContent>
                 </Collapsible>
 

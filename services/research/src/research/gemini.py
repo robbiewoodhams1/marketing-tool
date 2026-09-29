@@ -62,6 +62,17 @@ GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/inte
 DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
 DEFAULT_IMAGE_MIME_TYPE = "image/jpeg"
 
+# USD per 1,000,000 OUTPUT IMAGE tokens (Gemini API pricing, "Standard" tier,
+# gemini-2.5-flash-image; ai.google.dev/gemini-api/docs/pricing, fetched and
+# cross-checked 2026-09-29). Cross-verified against the real captured
+# response in this module's docstring: 1290 image tokens for one <=1024x1024
+# image -> (1290 / 1_000_000) * 30 = $0.0387, matching the docs' own worked
+# example of "$0.039 per image". Applied only to the response's own
+# image-modality output tokens (never `total_output_tokens`, which also
+# includes the model's incidental leading text step, billed at a different,
+# much lower text-output rate this module does not attempt to price).
+IMAGE_OUTPUT_TOKEN_RATE_USD_PER_MILLION = 30.0
+
 # Values the API documents for response_format.aspect_ratio.
 SUPPORTED_ASPECT_RATIOS = frozenset({
     "1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9",
@@ -172,7 +183,11 @@ class GeminiImageProvider:
             raise MediaProviderResponseError("image data was not valid base64", raw=None) from exc
         mime_type = image.get("mime_type") or image.get("mimeType") or DEFAULT_IMAGE_MIME_TYPE
         metadata = {k: v for k, v in image.items() if k not in ("data",)}
-        return GeneratedImage(data=raw_bytes, mime_type=mime_type, metadata=metadata)
+        cost_amount, cost_currency = _cost_from_usage(data)
+        return GeneratedImage(
+            data=raw_bytes, mime_type=mime_type, metadata=metadata,
+            cost_amount=cost_amount, cost_currency=cost_currency,
+        )
 
 
 def _images_from_steps(steps: Any, out: list[Any]) -> None:
@@ -228,6 +243,28 @@ def _find_output_image(data: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if isinstance(candidate, Mapping) and isinstance(candidate.get("data"), str):
             return candidate
     return None
+
+
+def _cost_from_usage(data: Mapping[str, Any]) -> tuple[float | None, str | None]:
+    """The response's own `usage.output_tokens_by_modality` (the real,
+    actually-billed token count for THIS call), priced at the published rate
+    - never a flat per-image guess. `(None, None)` if the response carries no
+    usable usage data (e.g. an unrecognised or future response shape) -
+    never a fabricated fallback figure."""
+    usage = data.get("usage")
+    by_modality = usage.get("output_tokens_by_modality") if isinstance(usage, Mapping) else None
+    if not isinstance(by_modality, list):
+        return None, None
+    image_tokens = sum(
+        entry["tokens"]
+        for entry in by_modality
+        if isinstance(entry, Mapping) and entry.get("modality") == "image"
+        and isinstance(entry.get("tokens"), (int, float))
+    )
+    if image_tokens <= 0:
+        return None, None
+    cost = (image_tokens / 1_000_000) * IMAGE_OUTPUT_TOKEN_RATE_USD_PER_MILLION
+    return round(cost, 6), "USD"
 
 
 def _redact(text: str, secret: str | None) -> str:

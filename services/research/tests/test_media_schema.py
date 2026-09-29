@@ -1,6 +1,6 @@
 import pytest
 
-from research.media_schema import AssetStatus, AssetType, GeneratedAsset, MediaValidationError
+from research.media_schema import AssetStatus, AssetType, AudioSubtype, GeneratedAsset, MediaValidationError
 
 
 def asset(**overrides):
@@ -17,7 +17,7 @@ def asset(**overrides):
 
 
 def test_asset_type_taxonomy_is_small():
-    assert [t.value for t in AssetType] == ["image", "video"]
+    assert [t.value for t in AssetType] == ["image", "video", "audio"]
 
 
 def test_asset_status_taxonomy_is_small():
@@ -62,7 +62,25 @@ def test_unknown_status_values_are_not_a_valid_enum_member(bad):
         AssetStatus(bad)
 
 
-@pytest.mark.parametrize("bad", ["audio", "gif", ""])
+@pytest.mark.parametrize("bad", ["gif", "pdf", ""])
 def test_unknown_asset_type_values_are_not_a_valid_enum_member(bad):
     with pytest.raises(ValueError):
         AssetType(bad)
+
+
+def test_audio_subtype_taxonomy():
+    assert [s.value for s in AudioSubtype] == ["voiceover", "ambient", "music", "sfx"]
+
+
+def test_an_audio_asset_carries_its_subtype_in_the_payload():
+    a = asset(
+        asset_type=AssetType.AUDIO, audio_subtype=AudioSubtype.VOICEOVER, mime_type="audio/wav",
+        width=None, height=None, storage_path="prod-1/run-1/scene-1.wav",
+        storage_url="https://example.com/scene-1.wav",
+    )
+    assert a.to_payload()["asset_type"] == "audio"
+    assert a.to_payload()["audio_subtype"] == "voiceover"
+
+
+def test_an_image_or_video_asset_has_no_audio_subtype_by_default():
+    assert asset().to_payload()["audio_subtype"] is None

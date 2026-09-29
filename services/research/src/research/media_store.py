@@ -35,6 +35,10 @@ PRODUCTION_COLUMNS = (
     "limitations,created_at"
 )
 PRODUCTION_RUN_COLUMNS = "id,product_key,product_version"
+MEDIA_DIRECTION_COLUMNS = (
+    "target_subject,appearance,setting,visual_style,camera_composition,lighting,avoid,"
+    "custom_instructions,additional_direction"
+)
 
 
 @dataclass(frozen=True)
@@ -57,20 +61,35 @@ class SaveRunOutcome:
 def compute_run_key(
     *,
     production_id: str,
-    image_provider: str,
-    image_model: str,
+    image_provider: str | None,
+    image_model: str | None,
     video_provider: str | None,
     video_model: str | None,
+    voice_provider: str | None = None,
+    voice_model: str | None = None,
     analysis_type: str = MEDIA_ANALYSIS_TYPE,
     pack_version: str,
     schema_version: str | None = None,
+    media_direction: Mapping[str, Any] | None = None,
 ) -> str:
     """SHA-256 of the canonical run configuration.
 
     The production is immutable, so its id alone stands in for its content
     (same principle as Production's own `compute_run_key` for its
     opportunity). Anything that changes which provider/model would generate
-    the scenes changes the key; nothing else does.
+    the scenes changes the key; nothing else does. Exactly one of
+    (image_provider, image_model) / (video_provider, video_model) /
+    (voice_provider, voice_model) is populated per run - a run is for one
+    media type, never more than one (see research.media's own module
+    docstring; research.voice mirrors the same rule for audio).
+
+    `media_direction` is the snapshot from `MediaDirection.to_snapshot()`
+    (or `None`): editing Media Direction changes what actually gets
+    generated, so it must change the key too - otherwise a regeneration after
+    an edit would be silently skipped as "already completed" by
+    `find_completed_asset`, and the edit would have no effect. (Voice
+    generation does not consult Media Direction - see research.voice's own
+    module docstring - so this is always `None` for a voice run.)
     """
     identity = {
         "analysis_type": analysis_type,
@@ -79,8 +98,11 @@ def compute_run_key(
         "image_model": image_model,
         "video_provider": video_provider,
         "video_model": video_model,
+        "voice_provider": voice_provider,
+        "voice_model": voice_model,
         "pack_version": pack_version,
         "schema_version": schema_version or MEDIA_SCHEMA_VERSION,
+        "media_direction": media_direction,
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -89,20 +111,25 @@ def compute_run_key(
 def build_run_payload(
     *,
     production_id: str,
-    image_provider: str,
-    image_model: str,
+    image_provider: str | None,
+    image_model: str | None,
     video_provider: str | None,
     video_model: str | None,
+    voice_provider: str | None = None,
+    voice_model: str | None = None,
     run_key: str,
     scene_count: int,
     manifest: dict[str, Any],
     pack_version: str,
     schema_version: str = MEDIA_SCHEMA_VERSION,
+    media_direction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "production_id": production_id,
         "image_provider": image_provider,
         "image_model": image_model,
+        "voice_provider": voice_provider,
+        "voice_model": voice_model,
         "video_provider": video_provider,
         "video_model": video_model,
         "analysis_type": MEDIA_ANALYSIS_TYPE,
@@ -111,6 +138,7 @@ def build_run_payload(
         "run_key": run_key,
         "scene_count": scene_count,
         "input_manifest": manifest,
+        "media_direction_snapshot": media_direction,
     }
 
 
@@ -135,6 +163,13 @@ class MediaRepository:
         return ProductionRecord(
             id=str(row["id"]), product_key=run["product_key"], product_version=run["product_version"], row=row
         )
+
+    def get_media_direction(self, production_id: str) -> Mapping[str, Any] | None:
+        """The saved `media_directions` row for this production, or `None` if
+        none has ever been saved (equivalent to an empty `MediaDirection`).
+        Editable, mutable, unlike everything else this repository reads."""
+        rows = self._db.select("media_directions", MEDIA_DIRECTION_COLUMNS, eq={"production_id": production_id})
+        return rows[0] if rows else None
 
     def find_run(self, run_key: str) -> str | None:
         """Id of an existing media run with this key, or None."""

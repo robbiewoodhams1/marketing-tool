@@ -35,6 +35,19 @@ class AssetType(str, Enum):
 
     IMAGE = "image"
     VIDEO = "video"
+    AUDIO = "audio"
+
+
+class AudioSubtype(str, Enum):
+    """Only meaningful when `AssetType` is `AUDIO` (see `GeneratedAsset`'s
+    own `audio_subtype` field and the DB CHECK that enforces this pairing).
+    V1 only ever writes `VOICEOVER`; the rest are reserved for future
+    chapters (music generation, SFX generation, full audio mixing)."""
+
+    VOICEOVER = "voiceover"
+    AMBIENT = "ambient"
+    MUSIC = "music"
+    SFX = "sfx"
 
 
 class AssetStatus(str, Enum):
@@ -71,6 +84,27 @@ class GeneratedAsset:
     mime_type: str | None = None
     width: int | None = None
     height: int | None = None
+    # Video only (null for images). This is the value actually REQUESTED of
+    # the provider (the nearest value it supports to the scene's own
+    # duration - see research.veo), not measured from the returned file: the
+    # completion response documented for Veo does not report duration, and
+    # this service does not probe media files. Never presented as an exact
+    # match to the scene's requested duration if the provider had to round it.
+    duration_seconds: float | None = None
+    # Generation cost, as reported by the provider itself (see
+    # `research.media_providers.GeneratedImage`/`GeneratedVideo`) - carried
+    # through unchanged, never computed or invented here. Populated on a
+    # FAILED asset too when the provider call itself succeeded and the money
+    # was genuinely spent before a later step (e.g. storage upload) failed;
+    # null when the provider call never completed, so no real cost was
+    # incurred. Always both-or-neither (enforced by a DB CHECK).
+    cost_amount: float | None = None
+    cost_currency: str | None = None
+    # Only meaningful when asset_type is AUDIO; must be None for image/video
+    # (enforced by a DB CHECK). This dataclass itself does not forbid
+    # setting it incorrectly - it is a plain data shape, not its own
+    # validator (see research.media_validation for what IS enforced).
+    audio_subtype: AudioSubtype | None = None
     error_message: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
@@ -90,5 +124,9 @@ class GeneratedAsset:
             "mime_type": self.mime_type,
             "width": self.width,
             "height": self.height,
+            "duration_seconds": self.duration_seconds,
+            "cost_amount": self.cost_amount,
+            "cost_currency": self.cost_currency,
+            "audio_subtype": self.audio_subtype.value if self.audio_subtype is not None else None,
             "error_message": self.error_message,
         }

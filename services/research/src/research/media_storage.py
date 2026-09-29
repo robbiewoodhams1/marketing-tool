@@ -25,6 +25,7 @@ _EXTENSION_BY_MIME_TYPE = {
     "image/png": "png",
     "image/webp": "webp",
     "video/mp4": "mp4",
+    "audio/wav": "wav",
 }
 
 
@@ -52,6 +53,16 @@ def scene_asset_path(*, production_id: str, media_run_id: str, scene_number: int
     content): idempotency is the database's job (run_key + the asset rows),
     not the storage path's."""
     return f"{production_id}/{media_run_id}/scene-{scene_number}-{uuid.uuid4().hex[:8]}.{extension}"
+
+
+def assembly_output_path(*, production_id: str, run_key: str, extension: str) -> str:
+    """One path per assembly attempt, in the same bucket/production folder as
+    the scene assets it was built from, but under its own `assembly/`
+    subfolder (there is no scene number for the finished, combined output).
+    Same idempotency principle as `scene_asset_path`: a short random suffix,
+    not a hash of content - the database (run_key + the assembly rows) is
+    the source of truth, not the storage path."""
+    return f"{production_id}/assembly/{run_key[:16]}-{uuid.uuid4().hex[:8]}.{extension}"
 
 
 class SupabaseStorage:
@@ -94,3 +105,23 @@ class SupabaseStorage:
             bucket=self._bucket, path=path,
             public_url=f"{self._base}/storage/v1/object/public/{self._bucket}/{path}",
         )
+
+    def download(self, path: str) -> bytes:
+        """Reads an object back by its storage path (not its public URL) -
+        used by Assembly to fetch already-generated scene videos. Uses the
+        same authenticated endpoint as `upload`, so it works regardless of
+        whether the bucket happens to be public."""
+        url = f"{self._base}/storage/v1/object/{self._bucket}/{path}"
+        headers = {"Authorization": f"Bearer {self._secret}", "apikey": self._secret}
+        try:
+            response = self._client.get(url, headers=headers)
+        except Exception as exc:
+            raise StorageError(f"Supabase Storage download failed: {type(exc).__name__}") from None
+        if response.status_code != 200:
+            detail = response.text[:300].replace(self._secret, "***")
+            raise StorageError(f"Supabase Storage download failed: HTTP {response.status_code}: {detail}")
+        return response.content
+
+    @property
+    def bucket(self) -> str:
+        return self._bucket

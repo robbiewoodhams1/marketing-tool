@@ -46,8 +46,21 @@ class Settings:
     media_image_model: str | None = None
     media_video_provider: str | None = None
     media_video_model: str | None = None
+    # Same pattern for voice/audio generation (research.voice / research.gemini_tts).
+    media_voice_provider: str | None = None
+    media_voice_model: str | None = None
+    # Veo (and any future long-running video provider) polling cadence.
+    # Unset means "use the provider's own default" (see research.veo).
+    media_video_poll_interval: float | None = None
+    media_video_poll_timeout: float | None = None
     # Supabase Storage bucket generated assets are uploaded to.
     media_storage_bucket: str | None = None
+    # Media Assembly: paths to the ffmpeg/ffprobe binaries. Unset means "look
+    # up 'ffmpeg'/'ffprobe' on PATH" (see research.ffmpeg_engine). Assembly
+    # makes no AI provider calls of its own; this is its only external
+    # dependency.
+    ffmpeg_path: str | None = None
+    ffprobe_path: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -71,5 +84,15 @@ class Settings:
             media_image_model=env.get("MEDIA_IMAGE_MODEL") or None,
             media_video_provider=env.get("MEDIA_VIDEO_PROVIDER") or None,
             media_video_model=env.get("MEDIA_VIDEO_MODEL") or None,
+            media_voice_provider=env.get("MEDIA_VOICE_PROVIDER") or None,
+            media_voice_model=env.get("MEDIA_VOICE_MODEL") or None,
+            media_video_poll_interval=_float_or_none(env.get("MEDIA_VIDEO_POLL_INTERVAL")),
+            media_video_poll_timeout=_float_or_none(env.get("MEDIA_VIDEO_POLL_TIMEOUT")),
             media_storage_bucket=env.get("MEDIA_STORAGE_BUCKET") or None,
+            ffmpeg_path=env.get("FFMPEG_PATH") or None,
+            ffprobe_path=env.get("FFPROBE_PATH") or None,
         )
+
+
+def _float_or_none(value: str | None) -> float | None:
+    return float(value) if value else None

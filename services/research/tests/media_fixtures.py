@@ -8,7 +8,7 @@ import re
 from opportunity_fixtures import PRODUCT  # noqa: F401  (re-exported for convenience)
 from test_persistence import FakeDatabase
 
-from research.media_providers import GeneratedImage
+from research.media_providers import GeneratedAudio, GeneratedImage, GeneratedVideo
 from research.persistence import PersistenceError
 
 PRODUCTION_ID = "prod-1"
@@ -66,6 +66,22 @@ def production_row(**kw):
     return row
 
 
+def media_direction_row(**kw):
+    row = {
+        "target_subject": "A UK sole-trader mechanic in his 40s",
+        "appearance": "Wearing branded work overalls, friendly expression",
+        "setting": "A small independent garage workshop",
+        "visual_style": None,
+        "camera_composition": None,
+        "lighting": None,
+        "avoid": "Do not show any other software or app on screen",
+        "custom_instructions": None,
+        "additional_direction": None,
+    }
+    row.update(kw)
+    return row
+
+
 def good_image(**kw):
     fields = dict(data=b"\x89PNG-fake-bytes", mime_type="image/png", width=1080, height=1920, metadata={})
     fields.update(kw)
@@ -99,6 +115,68 @@ class FakeImageProvider:
         return self._image
 
 
+def good_video(**kw):
+    fields = dict(
+        data=b"\x00\x00\x00\x18ftypmp4-fake-bytes", mime_type="video/mp4", duration_seconds=8.0,
+        width=1080, height=1920, metadata={"operation_name": "models/veo-fake/operations/1"},
+    )
+    fields.update(kw)
+    return GeneratedVideo(**fields)
+
+
+class FakeVideoProvider:
+    """A VideoProvider that never touches the network. Mirrors FakeImageProvider."""
+
+    def __init__(self, video=None, model="fake-video-model", error=None, side_effects=None):
+        self.model = model
+        self._video = video or good_video()
+        self._error = error
+        self._side_effects = list(side_effects) if side_effects else None
+        self.calls: list[tuple[str, str, dict]] = []
+
+    def generate_video(self, prompt, *, aspect_ratio="9:16", **options):
+        self.calls.append((prompt, aspect_ratio, options))
+        if self._side_effects:
+            outcome = self._side_effects.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        if self._error:
+            raise self._error
+        return self._video
+
+
+def good_audio(**kw):
+    fields = dict(
+        data=b"RIFF....WAVEfmt fake-wav-bytes", mime_type="audio/wav", duration_seconds=6.0,
+        metadata={"voice": "Kore", "language": "en-US"},
+    )
+    fields.update(kw)
+    return GeneratedAudio(**fields)
+
+
+class FakeVoiceProvider:
+    """A VoiceProvider that never touches the network. Mirrors FakeImageProvider/FakeVideoProvider."""
+
+    def __init__(self, audio=None, model="fake-voice-model", error=None, side_effects=None):
+        self.model = model
+        self._audio = audio or good_audio()
+        self._error = error
+        self._side_effects = list(side_effects) if side_effects else None
+        self.calls: list[tuple[str, str, str, dict]] = []
+
+    def generate_voice(self, text, *, voice="Kore", language="en-US", speed=None, **options):
+        self.calls.append((text, voice, language, options))
+        if self._side_effects:
+            outcome = self._side_effects.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        if self._error:
+            raise self._error
+        return self._audio
+
+
 class FakeStorage:
     """A SupabaseStorage stand-in that never touches the network."""
 
@@ -123,7 +201,7 @@ class RpcFakeDatabase(FakeDatabase):
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
-        for t in ("productions", "production_runs", "media_runs", "media_assets"):
+        for t in ("productions", "production_runs", "media_runs", "media_assets", "media_directions"):
             self.tables.setdefault(t, [])
         self.rpc_calls = []
 
@@ -162,7 +240,13 @@ class RpcFakeDatabase(FakeDatabase):
             raise PersistenceError("check violation: asset status")
         self._n += 1
         asset_id = f"masset-{self._n}"
-        self.tables["media_assets"].append({"id": asset_id, **copy.deepcopy(payload)})
+        # Real Postgres populates created_at via a column default (now()) on
+        # every insert; simulate that here (monotonically increasing, so
+        # "the latest row for scene N" - which research.assembly_store relies
+        # on - is meaningful in tests too) rather than leaving it entirely
+        # absent, which no payload ever sets client-side.
+        row = {"id": asset_id, "created_at": f"2026-01-01T00:00:00.{self._n:06d}+00:00", **copy.deepcopy(payload)}
+        self.tables["media_assets"].append(row)
         return {"status": "created", "asset_id": asset_id}
 
 

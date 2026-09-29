@@ -399,4 +399,148 @@ def test_migration_writes_through_two_atomic_functions_only_the_service_role_can
 
 def test_this_is_the_latest_migration():
     names = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
-    assert names[-1] == next(n for n in names if "create_media_runs" in n)
+    assert names[-1] == next(n for n in names if "add_audio_voice_generation" in n)
+
+
+# --- migration v2 (video support) -----------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def sql_v2():
+    [path] = MIGRATIONS.glob("*_add_duration_to_media_assets.sql")
+    stripped = re.sub(r"--[^\n]*", "", path.read_text())
+    return re.sub(r"\s+", " ", stripped).lower()
+
+
+def test_migration_v2_adds_a_nullable_duration_column(sql_v2):
+    assert "add column if not exists duration_seconds numeric" in sql_v2
+    assert "check (duration_seconds is null or duration_seconds > 0)" in sql_v2
+
+
+def test_migration_v2_makes_image_columns_nullable_with_a_one_modality_check(sql_v2):
+    assert "alter column image_provider drop not null" in sql_v2
+    assert "alter column image_model drop not null" in sql_v2
+    assert "constraint media_runs_has_one_modality" in sql_v2
+    assert (
+        "(image_provider is not null and image_model is not null) "
+        "or (video_provider is not null and video_model is not null)" in sql_v2
+    )
+
+
+def test_migration_v2_save_media_asset_still_service_role_only(sql_v2):
+    assert "create or replace function public.save_media_asset(payload jsonb) returns jsonb" in sql_v2
+    assert "duration_seconds" in sql_v2.split("create or replace function")[1]
+    assert "revoke all on function public.save_media_asset(jsonb) from public, anon, authenticated" in sql_v2
+    assert "grant execute on function public.save_media_asset(jsonb) to service_role" in sql_v2
+
+
+# --- migration v3 (media direction + cost tracking) ------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def sql_v3():
+    [path] = MIGRATIONS.glob("*_add_media_direction_and_cost_tracking.sql")
+    stripped = re.sub(r"--[^\n]*", "", path.read_text())
+    return re.sub(r"\s+", " ", stripped).lower()
+
+
+def test_migration_v3_creates_a_mutable_media_directions_table_with_one_row_per_production(sql_v3):
+    assert "create table public.media_directions" in sql_v3
+    body = sql_v3.split("create table public.media_directions")[1].split(");")[0]
+    assert "production_id uuid not null unique references public.productions(id)" in body
+    for field in (
+        "target_subject", "appearance", "setting", "visual_style", "camera_composition",
+        "lighting", "avoid", "custom_instructions", "additional_direction",
+    ):
+        assert f"{field} text" in body, field
+    # Unlike every other table in this schema, this one has no immutability trigger.
+    assert "media_directions_immutable" not in sql_v3
+    assert "forbid_update" not in body
+
+
+def test_migration_v3_grants_the_dashboard_read_and_write_on_media_directions(sql_v3):
+    policies = re.findall(r"create policy [^;]+on public\.media_directions[^;]+;", sql_v3)
+    assert len(policies) == 3
+    actions = {re.search(r"for (select|insert|update)", p).group(1) for p in policies}
+    assert actions == {"select", "insert", "update"}
+    for p in policies:
+        assert "to anon, authenticated" in p
+
+
+def test_migration_v3_adds_a_media_direction_snapshot_to_media_runs(sql_v3):
+    assert "add column if not exists media_direction_snapshot jsonb" in sql_v3
+
+
+def test_migration_v3_adds_paired_nullable_cost_columns_to_media_assets(sql_v3):
+    assert "add column if not exists cost_amount numeric" in sql_v3
+    assert "add column if not exists cost_currency text" in sql_v3
+    assert "check (cost_amount is null or cost_amount >= 0)" in sql_v3
+    assert "check (cost_currency is null or cost_currency ~ '^[a-z]{3}$')" in sql_v3
+    assert "check ((cost_amount is null) = (cost_currency is null))" in sql_v3
+
+
+def test_migration_v3_save_media_run_still_gets_or_creates_by_run_key(sql_v3):
+    body = sql_v3.split("create or replace function public.save_media_run")[1]
+    body = body.split("create or replace function public.save_media_asset")[0]
+    assert "media_direction_snapshot" in body
+    assert "on conflict (run_key) do nothing" in body
+    assert "revoke all on function public.save_media_run(jsonb) from public, anon, authenticated" in sql_v3
+    assert "grant execute on function public.save_media_run(jsonb) to service_role" in sql_v3
+
+
+def test_migration_v3_save_media_asset_still_service_role_only_and_carries_cost(sql_v3):
+    body = sql_v3.split("create or replace function public.save_media_asset")[1]
+    assert "cost_amount" in body and "cost_currency" in body
+    assert "revoke all on function public.save_media_asset(jsonb) from public, anon, authenticated" in sql_v3
+    assert "grant execute on function public.save_media_asset(jsonb) to service_role" in sql_v3
+
+
+# --- migration v4 (audio / voice generation) ---------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def sql_v4():
+    [path] = MIGRATIONS.glob("*_add_audio_voice_generation.sql")
+    stripped = re.sub(r"--[^\n]*", "", path.read_text())
+    return re.sub(r"\s+", " ", stripped).lower()
+
+
+def test_migration_v4_widens_asset_type_to_include_audio_without_touching_the_column(sql_v4):
+    assert "drop constraint media_assets_asset_type_check" in sql_v4
+    assert "check (asset_type in ('image', 'video', 'audio'))" in sql_v4
+
+
+def test_migration_v4_adds_an_audio_subtype_column_scoped_only_to_audio_rows(sql_v4):
+    assert "add column if not exists audio_subtype text" in sql_v4
+    assert "audio_subtype is null or audio_subtype in ('voiceover', 'ambient', 'music', 'sfx')" in sql_v4
+    assert "asset_type = 'audio' or audio_subtype is null" in sql_v4
+
+
+def test_migration_v4_adds_a_voice_provider_pair_and_widens_the_one_modality_check(sql_v4):
+    assert "add column if not exists voice_provider text" in sql_v4
+    assert "add column if not exists voice_model text" in sql_v4
+    assert "drop constraint media_runs_has_one_modality" in sql_v4
+    assert (
+        "(image_provider is not null and image_model is not null) "
+        "or (video_provider is not null and video_model is not null) "
+        "or (voice_provider is not null and voice_model is not null)" in sql_v4
+    )
+
+
+def test_migration_v4_save_media_run_and_asset_still_service_role_only_and_carry_the_new_fields(sql_v4):
+    run_body = sql_v4.split("create or replace function public.save_media_run")[1]
+    run_body = run_body.split("create or replace function public.save_media_asset")[0]
+    assert "voice_provider" in run_body and "voice_model" in run_body
+
+    asset_body = sql_v4.split("create or replace function public.save_media_asset")[1]
+    assert "audio_subtype" in asset_body
+
+    assert "revoke all on function public.save_media_run(jsonb) from public, anon, authenticated" in sql_v4
+    assert "revoke all on function public.save_media_asset(jsonb) from public, anon, authenticated" in sql_v4
+    assert "grant execute on function public.save_media_run(jsonb) to service_role" in sql_v4
+    assert "grant execute on function public.save_media_asset(jsonb) to service_role" in sql_v4
+
+
+def test_migration_v4_never_touches_image_or_video_only_widens(sql_v4):
+    # Purely additive: no DROP COLUMN, no narrowing of any existing check.
+    assert "drop column" not in sql_v4

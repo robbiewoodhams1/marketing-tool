@@ -282,3 +282,41 @@ def test_metadata_excludes_the_base64_blob():
     transport, _ = capture(real_response())
     image = provider(transport).generate_image("a scene")
     assert "data" not in image.metadata
+
+
+# --- generation cost: computed from the response's OWN usage, never invented --------------------
+
+
+def test_cost_is_computed_from_the_real_captured_response_usage():
+    # The exact real captured response (see the module docstring): 1290 image
+    # output tokens at the published $30/1,000,000 rate = $0.0387, matching
+    # the docs' own worked example of "$0.039 per image".
+    transport, _ = capture(real_captured_response())
+    image = provider(transport).generate_image("an icon")
+    assert image.cost_amount == pytest.approx(0.0387, abs=1e-6)
+    assert image.cost_currency == "USD"
+
+
+def test_cost_is_none_when_the_response_has_no_usage_block():
+    transport, _ = capture(real_response())  # no "usage" key at all
+    image = provider(transport).generate_image("a scene")
+    assert image.cost_amount is None and image.cost_currency is None
+
+
+def test_cost_is_none_when_usage_has_no_image_modality_entry():
+    response = real_captured_response()
+    response["usage"]["output_tokens_by_modality"] = [{"modality": "text", "tokens": 500}]
+    transport, _ = capture(response)
+    image = provider(transport).generate_image("a scene")
+    assert image.cost_amount is None and image.cost_currency is None
+
+
+def test_cost_ignores_incidental_text_tokens_and_only_prices_image_tokens():
+    response = real_captured_response()
+    response["usage"]["output_tokens_by_modality"] = [
+        {"modality": "text", "tokens": 11}, {"modality": "image", "tokens": 1290},
+    ]
+    transport, _ = capture(response)
+    image = provider(transport).generate_image("a scene")
+    # 1290, not 1301 (total_output_tokens, which includes the 11 text tokens)
+    assert image.cost_amount == pytest.approx(0.0387, abs=1e-6)

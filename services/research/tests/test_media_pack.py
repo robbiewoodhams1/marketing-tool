@@ -1,5 +1,6 @@
 from media_fixtures import PRODUCT, production_row, scene_row
 
+from research.media_direction import MediaDirection
 from research.media_pack import (
     DEFAULT_ASPECT_RATIO,
     PLATFORM_ASPECT_RATIOS,
@@ -93,3 +94,77 @@ def test_prompt_is_deterministic_for_the_same_inputs():
     a = build_scene_prompt(production=production_row(), scene=scene_row(1), product=PRODUCT)
     b = build_scene_prompt(production=production_row(), scene=scene_row(1), product=PRODUCT)
     assert a == b
+
+
+# --- Media Direction enters the prompt as its own, clearly-labelled layer -------------------------
+
+
+def test_no_direction_given_is_identical_to_an_empty_direction():
+    production, scene = production_row(), scene_row(1)
+    no_arg = build_scene_prompt(production=production, scene=scene, product=PRODUCT)
+    empty = build_scene_prompt(production=production, scene=scene, product=PRODUCT, direction=MediaDirection())
+    assert no_arg == empty
+
+
+def test_an_empty_direction_adds_no_guidance_section():
+    prompt = build_scene_prompt(
+        production=production_row(), scene=scene_row(1), product=PRODUCT, direction=MediaDirection()
+    )
+    assert "Human-directed visual guidance" not in prompt
+
+
+def test_a_filled_in_direction_appears_in_the_prompt_labelled_and_after_production_requirements():
+    direction = MediaDirection(
+        target_subject="A UK sole-trader mechanic in his 40s",
+        setting="A small independent garage workshop",
+        avoid="Do not show any other software or app on screen",
+    )
+    scene = scene_row(1)
+    prompt = build_scene_prompt(production=production_row(), scene=scene, product=PRODUCT, direction=direction)
+
+    assert "Human-directed visual guidance" in prompt
+    assert "Subject to depict: A UK sole-trader mechanic in his 40s" in prompt
+    assert "Setting / environment: A small independent garage workshop" in prompt
+    assert "Do NOT include: Do not show any other software or app on screen" in prompt
+
+    # Ordering: 1. Production scene requirements, 2. Media Direction, 3. provider requirements.
+    assert prompt.index(scene["purpose"]) < prompt.index("Human-directed visual guidance")
+    assert prompt.index("Human-directed visual guidance") < prompt.index("Style: clean, modern")
+
+
+def test_direction_never_removes_the_capability_boundary_or_out_of_scope_list():
+    # Media Direction is advisory only - it can never widen what the scene is
+    # allowed to depict. The production's own capability/out-of-scope lines
+    # must still be present exactly as without direction.
+    direction = MediaDirection(target_subject="Anything the human wants")
+    scene = scene_row(1, product_capability_refs=["quotes"])
+    with_direction = build_scene_prompt(production=production_row(), scene=scene, product=PRODUCT, direction=direction)
+    without_direction = build_scene_prompt(production=production_row(), scene=scene, product=PRODUCT)
+    assert "Depict only these real product capabilities, nothing else:" in with_direction
+    for out_of_scope_term in PRODUCT.out_of_scope:
+        assert out_of_scope_term in with_direction
+        assert out_of_scope_term in without_direction
+
+
+def test_direction_is_applied_identically_for_video_scenes():
+    direction = MediaDirection(lighting="Warm evening light")
+    prompt = build_scene_prompt(
+        production=production_row(), scene=scene_row(1), product=PRODUCT,
+        asset_type=AssetType.VIDEO, direction=direction,
+    )
+    assert "Lighting: Warm evening light" in prompt
+    assert prompt.index("Lighting: Warm evening light") < prompt.index("captions are added separately afterwards")
+
+
+def test_build_media_scene_pack_records_whether_direction_was_applied():
+    with_direction = build_media_scene_pack(
+        production=production_row(), scene=scene_row(1), product=PRODUCT,
+        direction=MediaDirection(target_subject="A mechanic"),
+    )
+    without_direction = build_media_scene_pack(production=production_row(), scene=scene_row(1), product=PRODUCT)
+    empty_direction = build_media_scene_pack(
+        production=production_row(), scene=scene_row(1), product=PRODUCT, direction=MediaDirection(),
+    )
+    assert with_direction.manifest["media_direction_applied"] is True
+    assert without_direction.manifest["media_direction_applied"] is False
+    assert empty_direction.manifest["media_direction_applied"] is False
