@@ -1,7 +1,7 @@
 // Run with `npm test` (Node's built-in runner; no dependencies).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatDuration, latestAssemblyByProduction, type AssemblyRow } from "./assembly-data.ts";
+import { formatDuration, hasCaptions, hasVoiceover, latestAssemblyByProduction, type AssemblyRow } from "./assembly-data.ts";
 
 function assembly(overrides: Partial<AssemblyRow> = {}): AssemblyRow {
   return {
@@ -16,6 +16,11 @@ function assembly(overrides: Partial<AssemblyRow> = {}): AssemblyRow {
     error_message: null,
     created_at: "2026-01-01T00:00:00Z",
     completed_at: "2026-01-01T00:00:05Z",
+    source_voice_asset_ids: null,
+    audio_policy: "mute-v1",
+    scene_manifest: null,
+    caption_policy: null,
+    caption_manifest: null,
     ...overrides,
   };
 }
@@ -74,4 +79,24 @@ test("formatDuration renders minutes and seconds over a minute", () => {
 test("formatDuration rounds to the nearest whole second", () => {
   assert.equal(formatDuration(36.2), "36s");
   assert.equal(formatDuration(59.6), "1m 0s");
+});
+
+test("hasVoiceover is false for a V1 (mute), picture-only assembly", () => {
+  assert.equal(hasVoiceover(assembly({ source_voice_asset_ids: null })), false);
+  assert.equal(hasVoiceover(assembly({ source_voice_asset_ids: [] })), false);
+});
+
+test("hasVoiceover is true for a V2 (voiceover-synced) assembly", () => {
+  assert.equal(
+    hasVoiceover(assembly({ source_voice_asset_ids: ["a1", "a2"], audio_policy: "voiceover-sync-v1" })),
+    true,
+  );
+});
+
+test("hasCaptions is false when caption_policy is null", () => {
+  assert.equal(hasCaptions(assembly({ caption_policy: null })), false);
+});
+
+test("hasCaptions is true when caption_policy is set", () => {
+  assert.equal(hasCaptions(assembly({ caption_policy: "captions-burned-v1" })), true);
 });

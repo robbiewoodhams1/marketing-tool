@@ -399,7 +399,7 @@ def test_migration_writes_through_two_atomic_functions_only_the_service_role_can
 
 def test_this_is_the_latest_migration():
     names = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
-    assert names[-1] == next(n for n in names if "add_audio_voice_generation" in n)
+    assert names[-1] == next(n for n in names if "add_captions_v1" in n)
 
 
 # --- migration v2 (video support) -----------------------------------------------------------------

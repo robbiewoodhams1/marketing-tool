@@ -1,11 +1,17 @@
-import { AlertTriangle, Boxes, Film, ImageOff, Mic } from "lucide-react";
+import { AlertTriangle, Boxes, Captions, Film, ImageOff, Mic } from "lucide-react";
 import { createClient } from "@/supabase/server";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
-import { latestAssemblyByProduction, formatDuration, type AssemblyRow } from "./_lib/assembly-data";
+import {
+  latestAssemblyByProduction,
+  formatDuration,
+  hasCaptions,
+  hasVoiceover,
+  type AssemblyRow,
+} from "./_lib/assembly-data";
 import {
   completedSceneCount,
   formatCost,
@@ -53,7 +59,7 @@ export default async function MediaPage({
   let assemblyQuery = supabase
     .from("media_assemblies")
     .select(
-      "id, production_id, status, source_scene_count, source_duration_seconds, output_duration_seconds, output_storage_url, output_mime_type, error_message, created_at, completed_at",
+      "id, production_id, status, source_scene_count, source_duration_seconds, output_duration_seconds, output_storage_url, output_mime_type, error_message, created_at, completed_at, source_voice_asset_ids, audio_policy, scene_manifest, caption_policy, caption_manifest",
     )
     .order("created_at", { ascending: true });
   if (productionId) assemblyQuery = assemblyQuery.eq("production_id", productionId);
@@ -106,6 +112,8 @@ export default async function MediaPage({
           .filter((pid) => latestAssembly.has(pid))
           .map((pid) => {
             const asm = latestAssembly.get(pid)!;
+            const withVoice = hasVoiceover(asm);
+            const withCaptions = hasCaptions(asm);
             const generatedCosts = sumCosts(
               groups.filter((g) => g.productionId === pid).flatMap((g) => g.assets),
             );
@@ -120,7 +128,22 @@ export default async function MediaPage({
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant="outline">{asm.source_scene_count} scene(s)</Badge>
+                      <Badge variant="outline">
+                        <Film className="mr-1 size-3" />
+                        {asm.source_scene_count} video{asm.source_scene_count === 1 ? "" : "s"}
+                      </Badge>
+                      {withVoice && (
+                        <Badge variant="outline">
+                          <Mic className="mr-1 size-3" />
+                          {asm.source_voice_asset_ids?.length} voiceover{asm.source_voice_asset_ids?.length === 1 ? "" : "s"}
+                        </Badge>
+                      )}
+                      {withCaptions && (
+                        <Badge variant="outline">
+                          <Captions className="mr-1 size-3" />
+                          Captions
+                        </Badge>
+                      )}
                       <Badge variant={asm.status === "completed" ? "secondary" : "destructive"}>
                         {asm.status}
                       </Badge>
@@ -151,6 +174,18 @@ export default async function MediaPage({
                       <div>
                         <dt className="text-xs text-muted-foreground">Final duration</dt>
                         <dd>{formatDuration(asm.output_duration_seconds)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-muted-foreground">Audio</dt>
+                        <dd>{withVoice ? "Voiceover (source video muted)" : "None (V1, picture-only)"}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-muted-foreground">Captions</dt>
+                        <dd>
+                          {withCaptions
+                            ? `Burned in (${asm.caption_manifest?.length ?? 0} segment${asm.caption_manifest?.length === 1 ? "" : "s"})`
+                            : "Off"}
+                        </dd>
                       </div>
                       <div>
                         <dt className="text-xs text-muted-foreground">Created</dt>

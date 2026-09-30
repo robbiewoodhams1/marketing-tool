@@ -78,4 +78,71 @@ def test_migration_never_invents_a_processing_cost(sql):
 
 def test_this_is_the_latest_migration():
     names = sorted(p.name for p in MIGRATIONS.glob("*.sql"))
-    assert names[-1] == next(n for n in names if "add_audio_voice_generation" in n)
+    assert names[-1] == next(n for n in names if "add_captions_v1" in n)
+
+
+# --- Assembly V2 (voiceover sync) migration -----------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def v2_sql():
+    [path] = MIGRATIONS.glob("*_add_assembly_v2_audio_sync.sql")
+    stripped = re.sub(r"--[^\n]*", "", path.read_text())
+    return re.sub(r"\s+", " ", stripped).lower()
+
+
+def test_v2_migration_adds_voice_asset_ids_and_policy_and_manifest_columns(v2_sql):
+    assert "add column if not exists source_voice_asset_ids uuid[]" in v2_sql
+    assert "add column if not exists audio_policy text not null default 'mute-v1'" in v2_sql
+    assert "add column if not exists scene_manifest jsonb" in v2_sql
+
+
+def test_v2_migration_constrains_audio_policy_to_known_values(v2_sql):
+    assert "audio_policy in ('mute-v1', 'voiceover-sync-v1')" in v2_sql
+
+
+def test_v2_migration_requires_one_voice_asset_id_per_scene_when_present(v2_sql):
+    assert (
+        "check (source_voice_asset_ids is null or array_length(source_voice_asset_ids, 1) = source_scene_count)"
+        in v2_sql
+    )
+
+
+def test_v2_migration_recreates_save_media_assembly_with_the_new_fields(v2_sql):
+    assert "create or replace function public.save_media_assembly(payload jsonb) returns jsonb" in v2_sql
+    assert "source_voice_asset_ids" in v2_sql and "scene_manifest" in v2_sql
+    assert "revoke all on function public.save_media_assembly(jsonb) from public, anon, authenticated" in v2_sql
+    assert "grant execute on function public.save_media_assembly(jsonb) to service_role" in v2_sql
+
+
+# --- Captions V1 migration -----------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def captions_sql():
+    [path] = MIGRATIONS.glob("*_add_captions_v1.sql")
+    stripped = re.sub(r"--[^\n]*", "", path.read_text())
+    return re.sub(r"\s+", " ", stripped).lower()
+
+
+def test_captions_migration_adds_nullable_policy_and_manifest_columns(captions_sql):
+    assert "add column if not exists caption_policy text" in captions_sql
+    assert "add column if not exists caption_manifest jsonb" in captions_sql
+    # Unlike audio_policy, captions are optional - no NOT NULL/default here.
+    assert "caption_policy text not null" not in captions_sql
+
+
+def test_captions_migration_constrains_caption_policy_to_known_values(captions_sql):
+    assert "caption_policy is null or caption_policy in ('captions-burned-v1')" in captions_sql
+
+
+def test_captions_migration_requires_manifest_and_policy_together(captions_sql):
+    assert "(caption_manifest is null) = (caption_policy is null)" in captions_sql
+
+
+def test_captions_migration_recreates_save_media_assembly_with_the_new_fields(captions_sql):
+    assert "create or replace function public.save_media_assembly(payload jsonb) returns jsonb" in captions_sql
+    assert "caption_policy" in captions_sql and "caption_manifest" in captions_sql
+    assert "nullif(payload -> 'caption_manifest', 'null'::jsonb)" in captions_sql
+    assert "revoke all on function public.save_media_assembly(jsonb) from public, anon, authenticated" in captions_sql
+    assert "grant execute on function public.save_media_assembly(jsonb) to service_role" in captions_sql

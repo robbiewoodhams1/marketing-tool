@@ -1,9 +1,14 @@
 import re
 
-from assembly_fixtures import completed_video_asset_row, seeded_assembly_db
+from assembly_fixtures import (
+    completed_video_asset_row,
+    completed_voice_asset_row,
+    seeded_assembly_db,
+    seeded_assembly_db_with_voice,
+)
 from media_fixtures import PRODUCTION_ID
 
-from research.assembly_schema import AssemblyRecord, AssemblyStatus
+from research.assembly_schema import ASSEMBLY_AUDIO_POLICY_MUTE, ASSEMBLY_AUDIO_POLICY_VOICEOVER, AssemblyRecord, AssemblyStatus
 from research.assembly_store import AssemblyRepository, compute_assembly_run_key
 
 # --- compute_assembly_run_key -----------------------------------------------------------------------
@@ -30,6 +35,106 @@ def test_run_key_is_sensitive_to_asset_identity():
 def test_run_key_is_sensitive_to_the_production():
     a = compute_assembly_run_key(production_id="prod-1", source_asset_ids=["a"])
     b = compute_assembly_run_key(production_id="prod-2", source_asset_ids=["a"])
+    assert a != b
+
+
+def test_run_key_defaults_to_no_voice_ids_and_the_mute_policy():
+    # A V1 (research.assembly) call site never passes voice ids/policy - the
+    # defaults must reproduce exactly what it always computed.
+    a = compute_assembly_run_key(production_id=PRODUCTION_ID, source_asset_ids=["a", "b"])
+    b = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["a", "b"], source_voice_asset_ids=(),
+        audio_policy=ASSEMBLY_AUDIO_POLICY_MUTE,
+    )
+    assert a == b
+
+
+def test_run_key_is_sensitive_to_voice_asset_identity():
+    # Regenerating a scene's VOICEOVER (video unchanged) must produce a
+    # genuinely new assembly, never a silently-reused one.
+    a = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2"], source_voice_asset_ids=["a1", "a2"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    b = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2"], source_voice_asset_ids=["a1", "a2-new"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    assert a != b
+
+
+def test_run_key_is_sensitive_to_voice_asset_order():
+    a = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2"], source_voice_asset_ids=["a1", "a2"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    b = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2"], source_voice_asset_ids=["a2", "a1"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    assert a != b
+
+
+def test_run_key_is_sensitive_to_video_asset_identity_even_with_voice_present():
+    # The symmetric case: video changes, voice does not - still a new key.
+    a = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2"], source_voice_asset_ids=["a1", "a2"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    b = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2-new"], source_voice_asset_ids=["a1", "a2"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    assert a != b
+
+
+def test_run_key_is_sensitive_to_the_audio_policy():
+    # Same source assets, different policy (e.g. a future audio-mixing
+    # version) - must never collide with today's V1/V2 keys.
+    mute = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1"], audio_policy=ASSEMBLY_AUDIO_POLICY_MUTE,
+    )
+    voiceover = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1"], audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    assert mute != voiceover
+
+
+def test_run_key_omits_caption_policy_entirely_when_none_so_pre_captions_keys_are_unaffected():
+    # Captions V1 was added after Assembly V2 already shipped - an assembly
+    # computed without requesting captions must hash EXACTLY as it always
+    # did, so already-completed assemblies remain valid/reusable.
+    without_param = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2"], source_voice_asset_ids=["a1", "a2"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    with_explicit_none = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1", "v2"], source_voice_asset_ids=["a1", "a2"],
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER, caption_policy=None,
+    )
+    assert without_param == with_explicit_none
+
+
+def test_run_key_is_sensitive_to_the_caption_policy_when_captions_are_requested():
+    without_captions = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1"], audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+    )
+    with_captions = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1"], audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+        caption_policy="captions-burned-v1",
+    )
+    assert without_captions != with_captions
+
+
+def test_run_key_is_sensitive_to_which_caption_policy_string_is_given():
+    a = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1"], audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+        caption_policy="captions-burned-v1",
+    )
+    b = compute_assembly_run_key(
+        production_id=PRODUCTION_ID, source_asset_ids=["v1"], audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+        caption_policy="captions-burned-v2",
+    )
     assert a != b
 
 
@@ -101,6 +206,54 @@ def test_a_scene_with_no_completed_video_at_all_is_simply_absent():
     assert [v.scene_number for v in videos] == [1]
 
 
+# --- get_completed_voice_assets ---------------------------------------------------------------------
+
+
+def test_get_completed_voice_assets_returns_one_entry_per_scene_in_scene_order():
+    db = seeded_assembly_db_with_voice(scene_numbers=(3, 1, 2))
+    voices = AssemblyRepository(db).get_completed_voice_assets(PRODUCTION_ID)
+    assert [v.scene_number for v in voices] == [1, 2, 3]
+
+
+def test_get_completed_voice_assets_carries_the_storage_reference_and_duration():
+    db = seeded_assembly_db_with_voice(scene_numbers=(1,), voice_kwargs={"duration_seconds": 7.5})
+    [voice] = AssemblyRepository(db).get_completed_voice_assets(PRODUCTION_ID)
+    assert voice.storage_bucket == "media-assets"
+    assert voice.storage_path.endswith(".wav")
+    assert voice.duration_seconds == 7.5
+
+
+def test_get_completed_voice_assets_resolves_to_the_latest_completed_row():
+    db = seeded_assembly_db_with_voice(scene_numbers=(1,))
+    db.tables["media_assets"].append(
+        completed_voice_asset_row(1, asset_id="aasset-1-old", created_at="2025-01-01T00:00:00+00:00")
+    )
+    voices = AssemblyRepository(db).get_completed_voice_assets(PRODUCTION_ID)
+    assert len(voices) == 1 and voices[0].id == "aasset-1"
+
+
+def test_get_completed_voice_assets_never_returns_video_or_image_assets():
+    db = seeded_assembly_db_with_voice(scene_numbers=(1,))  # already has a completed video for scene 1
+    voices = AssemblyRepository(db).get_completed_voice_assets(PRODUCTION_ID)
+    assert len(voices) == 1 and voices[0].id == "aasset-1"
+
+
+def test_get_completed_voice_assets_never_returns_ambient_or_music_audio_subtypes():
+    db = seeded_assembly_db_with_voice(scene_numbers=(1,))
+    db.tables["media_assets"].append({
+        **completed_voice_asset_row(1, asset_id="ambient-1", created_at="2026-01-03T00:00:00+00:00"),
+        "audio_subtype": "ambient",
+    })
+    voices = AssemblyRepository(db).get_completed_voice_assets(PRODUCTION_ID)
+    assert len(voices) == 1 and voices[0].id == "aasset-1"
+
+
+def test_a_scene_with_no_completed_voice_at_all_is_simply_absent():
+    db = seeded_assembly_db_with_voice(scene_numbers=(1, 2), voice_scene_numbers=(1,))
+    voices = AssemblyRepository(db).get_completed_voice_assets(PRODUCTION_ID)
+    assert [v.scene_number for v in voices] == [1]
+
+
 # --- save_assembly / find_assembly / get_assembly ----------------------------------------------------
 
 
@@ -122,6 +275,43 @@ def test_a_completed_assembly_can_be_saved_and_found_and_read_back():
     row = repo.get_assembly(assembly_id)
     assert row["status"] == "completed" and row["output_duration_seconds"] == 6.1
     assert row["completed_at"] is not None
+    # A plain V1 (video-only) record defaults to no voice ids and the mute policy.
+    assert row["source_voice_asset_ids"] == []
+    assert row["audio_policy"] == ASSEMBLY_AUDIO_POLICY_MUTE
+
+
+def test_a_v2_voiceover_synced_assembly_persists_its_voice_ids_policy_and_scene_manifest():
+    db = seeded_assembly_db_with_voice(scene_numbers=(1, 2))
+    repo = AssemblyRepository(db)
+    manifest = (
+        {
+            "scene_number": 1, "video_asset_id": "vasset-1", "voice_asset_id": "aasset-1",
+            "video_duration_seconds": 4.0, "voice_duration_seconds": 6.0, "scene_duration_seconds": 6.0,
+            "sync_strategy": "video_extended_frozen_frame",
+        },
+        {
+            "scene_number": 2, "video_asset_id": "vasset-2", "voice_asset_id": "aasset-2",
+            "video_duration_seconds": 6.0, "voice_duration_seconds": 5.0, "scene_duration_seconds": 6.0,
+            "sync_strategy": "audio_padded_with_silence",
+        },
+    )
+    record = AssemblyRecord(
+        status=AssemblyStatus.COMPLETED,
+        run_key=compute_assembly_run_key(
+            production_id=PRODUCTION_ID, source_asset_ids=["vasset-1", "vasset-2"],
+            source_voice_asset_ids=["aasset-1", "aasset-2"], audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER,
+        ),
+        source_asset_ids=("vasset-1", "vasset-2"), source_scene_count=2, source_duration_seconds=10.0,
+        output_duration_seconds=12.0, output_storage_bucket="media-assets",
+        output_storage_path="p/assembly/x.mp4", output_storage_url="https://x/p/assembly/x.mp4",
+        output_mime_type="video/mp4", source_voice_asset_ids=("aasset-1", "aasset-2"),
+        audio_policy=ASSEMBLY_AUDIO_POLICY_VOICEOVER, scene_manifest=manifest,
+    )
+    assembly_id = repo.save_assembly(production_id=PRODUCTION_ID, record=record)
+    row = repo.get_assembly(assembly_id)
+    assert row["source_voice_asset_ids"] == ["aasset-1", "aasset-2"]
+    assert row["audio_policy"] == ASSEMBLY_AUDIO_POLICY_VOICEOVER
+    assert row["scene_manifest"] == list(manifest)
 
 
 def test_a_failed_assembly_can_be_saved_and_read_back_but_never_counts_as_done():
